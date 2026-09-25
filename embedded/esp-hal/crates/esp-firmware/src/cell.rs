@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use cell_protocol::{CellAttachment, MailboxCommand, MailboxEvent};
+use cell_protocol::{CellAttachment, MailboxCommand, MailboxEvent, scope_of_cell};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
 use embassy_sync::signal::Signal;
@@ -267,7 +267,7 @@ impl Cell {
         payload: Vec<u8>,
     ) -> Result<(), SendError> {
         let cmd = Command::try_from(command).map_err(|_| SendError::BadName)?;
-        self.exchange(DbClientRequest::SendCommand {
+        self.write(DbClientRequest::SendCommand {
             dest_sri: dest,
             command: MailboxCommand {
                 cmd,
@@ -286,7 +286,7 @@ impl Cell {
     /// [`SendError::Rejected`] if the db refuses the write.
     pub async fn publish_event(&self, event: &str, payload: Vec<u8>) -> Result<(), SendError> {
         let ev = Event::try_from(event).map_err(|_| SendError::BadName)?;
-        self.exchange(DbClientRequest::PublishEvent {
+        self.write(DbClientRequest::PublishEvent {
             event: MailboxEvent {
                 event: ev,
                 payload,
@@ -323,6 +323,31 @@ impl Cell {
         let mut attachment = CellAttachment::default();
         attachment.set_sender(Some(self.sri.as_uuid()));
         attachment
+    }
+
+    /// Native tasks do not run inside the WASM dispatcher, so they must open
+    /// and commit their own database application for outgoing writes.
+    async fn write(&self, req: DbClientRequest) -> Result<(), SendError> {
+        self.net
+            .requests
+            .send(DbClientRequest::Open(scope_of_cell(self.sri)))
+            .await;
+        if !matches!(self.net.responses.receive().await, DbClientResponse::Open) {
+            return Err(SendError::Rejected);
+        }
+
+        let accepted = self.exchange(req).await;
+        if accepted.is_err() {
+            self.net.requests.send(DbClientRequest::Rollback).await;
+            let _ = self.net.responses.receive().await;
+            return accepted;
+        }
+
+        self.net.requests.send(DbClientRequest::Commit).await;
+        match self.net.responses.receive().await {
+            DbClientResponse::Commit(Ok(())) => Ok(()),
+            _ => Err(SendError::Rejected),
+        }
     }
 
     async fn exchange(&self, req: DbClientRequest) -> Result<(), SendError> {
