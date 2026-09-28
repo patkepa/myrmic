@@ -1076,12 +1076,10 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                 }
             };
 
-            tx.insert_changeset(sp, sm, &entries)?;
+            let wrote = tx.insert_changeset(sp, sm, &entries)?;
 
-            let ok = tx.commit().is_ok();
-
-            if ok {
-                inserted = true;
+            if tx.commit().is_ok() {
+                inserted = wrote;
                 break;
             }
 

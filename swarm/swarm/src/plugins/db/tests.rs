@@ -12,6 +12,8 @@ use db_client::v1::Client;
 use db_commons::models::events::TableEvent;
 use db_commons::models::{self, Scope, Subject};
 
+mod handoff_timing;
+
 const TABLE: &str = "letters";
 
 async fn open_session() -> zenoh::Session {
