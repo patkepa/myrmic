@@ -34,11 +34,6 @@ pub const SYNC_PAGE_BYTES: usize = 64 * 1024;
 /// pages instead of ballooning into one link-choking reply.
 const CHUNK_WIRE_OVERHEAD: usize = 48;
 
-/// Pause between pulled pages. The puller paces the transfer, so this is the
-/// duty-cycle knob that keeps a deep pull from saturating the holder's link
-/// or the puller's own storage.
-const PULL_PAGE_PAUSE: Duration = Duration::from_millis(250);
-
 /// Rough serialised size of a chunk's payload, for the pull page budget —
 /// the entry bytes plus a small per-entry overhead.
 fn chunk_size(entries: &[(models::RawKey, Option<models::Value>)]) -> usize {
@@ -652,6 +647,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         let mut pages = 0usize;
 
         loop {
+            let page_started = Instant::now();
             let Some(sync::PullResponse { chunks, next }) =
                 self.transport.pull(target, req.clone()).await
             else {
@@ -677,9 +673,12 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             match next {
                 Some(cursor) => {
                     req.after = Some(cursor);
-                    // Breathing room between pages: the requester paces this
-                    // transfer, and a small node's storage must survive it.
-                    tokio::time::sleep(PULL_PAGE_PAUSE).await;
+                    // The requester paces this transfer: resting as long as
+                    // the page took to fetch and apply holds a deep pull to
+                    // half the holder's link and this node's storage, whatever
+                    // either can do, rather than a fixed rate that is flat out
+                    // for a small node and needlessly slow for a fast one.
+                    tokio::time::sleep(page_started.elapsed()).await;
                 }
                 None => break,
             }

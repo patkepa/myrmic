@@ -173,10 +173,16 @@ const DEFAULT_OFFLOAD_ESCALATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// when it may escalate itself back into a replica.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffloadKind {
-    /// Shedding a scope this node stopped replicating (or found stranded).
-    /// Hidden from locate — it is not trying to attract transactions — but
-    /// escalation is armed: uncovered data must still find a durable home.
+    /// Shedding rows found stranded here — committed to a scope this node
+    /// never replicated. Hidden from locate, since it is not trying to attract
+    /// transactions, but escalation is armed: uncovered data must still find a
+    /// durable home.
     Hidden,
+    /// Shedding a scope the configuration no longer has this node replicate.
+    /// It holds a full copy while its successor may still be catching up, so
+    /// it stays findable: reads rank it by head, and writes already pass
+    /// drainers by. Escalation is armed, as for [`Self::Hidden`].
+    Dropped,
     /// A fallback write landed here because no replica was locatable: the
     /// scope stays findable so subsequent writes consolidate onto this node,
     /// and escalation is armed.
@@ -716,8 +722,8 @@ async fn drive_offload(
     let me = context.session.zid();
 
     // Findable unless hidden, so a scope no other replica holds can still be
-    // located; held for the offloader's lifetime.
-    let _queryable = if matches!(kind, OffloadKind::Hidden) {
+    // located; held until the drain stops, and never while it releases.
+    let queryable = if matches!(kind, OffloadKind::Hidden) {
         None
     } else {
         let locate_ke = db_commons::topics::replica_query::format(
@@ -742,7 +748,7 @@ async fn drive_offload(
     let interval = Duration::from_secs(2);
     let jitter_range = 100..2000u64;
     let mut escalate_at = match kind {
-        OffloadKind::Hidden | OffloadKind::Sink => {
+        OffloadKind::Hidden | OffloadKind::Dropped | OffloadKind::Sink => {
             Some(tokio::time::Instant::now() + context.escalation_timeout)
         }
         // Unarmed: re-promotion would ping-pong with the target unless the
@@ -840,19 +846,7 @@ async fn drive_offload(
         }
     }
 
-    {
-        // Only this drain's own entry: a successor for the same scope may
-        // already have registered its own signal.
-        let mut rearms = context.offload_rearms.lock().expect("rearm map poisoned");
-        if rearms.get(&scope).is_some_and(|n| Arc::ptr_eq(n, &rearm)) {
-            rearms.remove(&scope);
-        }
-
-        let mut nudges = context.offload_nudges.lock().expect("nudge map poisoned");
-        if nudges.get(&scope).is_some_and(|n| Arc::ptr_eq(n, &nudge)) {
-            nudges.remove(&scope);
-        }
-    }
+    forget_drain_signals(&context, &scope, &rearm, &nudge);
 
     // A verified holder covers everything this drain held; its custody — if
     // this was a demoted provisional — is over.
@@ -872,8 +866,31 @@ async fn drive_offload(
     //
     // `covered` is empty unless a verification actually happened, so a
     // `stopped()` that came from somewhere else releases nothing.
+    //
+    // Unfindable first: a drain still answering locate while it releases
+    // would route reads to a copy that is disappearing under them.
+    drop(queryable);
     if retired {
         release_offloaded(&context, &scope, &covered, me).await;
+    }
+}
+
+/// Unregisters a stopped drain's re-arm and nudge signals — only its own: a
+/// successor for the same scope may already have registered its own.
+fn forget_drain_signals(
+    context: &StoreContext,
+    scope: &models::Scope,
+    rearm: &Arc<Notify>,
+    nudge: &Arc<Notify>,
+) {
+    let mut rearms = context.offload_rearms.lock().expect("rearm map poisoned");
+    if rearms.get(scope).is_some_and(|n| Arc::ptr_eq(n, rearm)) {
+        rearms.remove(scope);
+    }
+
+    let mut nudges = context.offload_nudges.lock().expect("nudge map poisoned");
+    if nudges.get(scope).is_some_and(|n| Arc::ptr_eq(n, nudge)) {
+        nudges.remove(scope);
     }
 }
 

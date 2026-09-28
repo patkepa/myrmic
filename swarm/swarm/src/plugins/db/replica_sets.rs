@@ -446,19 +446,24 @@ async fn reconcile(
         context.start_replication(subject.clone()).await;
     }
 
-    let mut stopped = false;
-    for subject in active.difference(&desired) {
+    let dropped: Vec<models::Subject> = active.difference(&desired).cloned().collect();
+    for subject in &dropped {
         let (namespace, database, schema) = subject.as_keyexprs();
         tracing::info!("no longer replicating {namespace}/{database}/{schema}");
         context.store.stop_replication(subject);
-        stopped = true;
     }
 
     // A stopped subject's local data must not stay stranded; offer it up now
-    // rather than waiting for the stray-scan backstop.
-    if stopped {
+    // rather than waiting for the stray-scan backstop. What a dropped subject
+    // covers is a full copy, and stays findable until its successor has it.
+    if !dropped.is_empty() {
         for scope in super::stray_scopes(context).await {
-            context.start_offload(scope, OffloadKind::Hidden);
+            let kind = if dropped.iter().any(|subject| subject.contains(&scope)) {
+                OffloadKind::Dropped
+            } else {
+                OffloadKind::Hidden
+            };
+            context.start_offload(scope, kind);
         }
     }
 

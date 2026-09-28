@@ -686,11 +686,13 @@ async fn dropping_replication_stops_locate_and_starts_offloading() {
         .await
         .expect("unable to subscribe");
 
-    commit_and_await_version(&client, &events_rx).await;
-
+    // Replicating before the commit: a commit landing first would start a
+    // stray drain of its own, still running when the replica is dropped.
     let replica = db_client::replica_v1::Client::new(&session, Subject::Scope(scope()))
         .expect("unable to create replica client");
     locate_eventually(&replica, &scope(), None).await;
+
+    commit_and_await_version(&client, &events_rx).await;
 
     // Watch the scope's replica channel raw, as in the offload test above.
     let s = scope();
@@ -741,17 +743,20 @@ async fn dropping_replication_stops_locate_and_starts_offloading() {
         .expect("send failed")
         .expect("commit failed");
 
-    // The replicator winds down, so locate stops offering this node up.
+    // The replicator winds down, but the full copy stays findable as a drain
+    // until a successor holds it — never as a replica, so writes pass it by.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let holders = replica.locate(&scope(), None).await.expect("locate failed");
-        if holders.is_empty() {
+        if let [holder] = holders.as_slice()
+            && matches!(holder.state, models::locate::HolderState::Draining)
+        {
             break;
         }
 
         assert!(
             tokio::time::Instant::now() < deadline,
-            "a dropped replica must stop answering locate"
+            "a dropped replica must answer locate as a drain, not a replica"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

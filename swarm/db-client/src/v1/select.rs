@@ -1,6 +1,6 @@
 use db_commons::models::{
     NodeId, Version,
-    locate::{PeerView, Response},
+    locate::{HolderState, PeerView, Response},
 };
 
 #[cfg(feature = "nano")]
@@ -8,6 +8,10 @@ use alloc::vec::Vec;
 
 /// Flattens locate replies into routing candidates: each responder answered for
 /// itself (so age zero), and vouched for the peers it named.
+///
+/// Only full replicas are taken on another's word. A drainer that can still
+/// serve answers locate itself; one vouched for but silent has retired, or is
+/// hidden, and may already have released what the voucher last heard it held.
 pub(crate) fn candidates(responses: impl IntoIterator<Item = Response>) -> Vec<PeerView> {
     responses
         .into_iter()
@@ -18,7 +22,11 @@ pub(crate) fn candidates(responses: impl IntoIterator<Item = Response>) -> Vec<P
                 head: r.head,
                 state: r.state,
             })
-            .chain(r.peers)
+            .chain(
+                r.peers
+                    .into_iter()
+                    .filter(|peer| matches!(peer.state, HolderState::Replica)),
+            )
         })
         .collect()
 }
@@ -51,7 +59,6 @@ pub(crate) fn select_holder(
     max_age_ms: u64,
     prefer_full: bool,
 ) -> Option<NodeId> {
-    use db_commons::models::locate::HolderState;
     use db_commons::models::rendezvous_hash;
 
     candidates
@@ -145,11 +152,11 @@ mod tests {
     }
 
     #[test]
-    fn candidates_include_each_responder_and_its_vouched_peers() {
+    fn candidates_include_each_responder_and_its_vouched_replicas() {
         let responses = vec![Response {
             id: node(1),
             head: 10,
-            peers: vec![drainer(2, 500, 9)],
+            peers: vec![peer(2, 500, 9), drainer(3, 500, 11)],
             state: HolderState::Draining,
         }];
 
@@ -172,7 +179,10 @@ mod tests {
             .expect("vouched peer");
         assert_eq!(vouched.age_ms, 500);
         assert_eq!(vouched.head, 9);
-        assert!(matches!(vouched.state, HolderState::Draining));
+        assert!(
+            cands.iter().all(|c| c.id != node(3)),
+            "a drainer only counts when it answers for itself"
+        );
     }
 
     #[test]
