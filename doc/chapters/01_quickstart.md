@@ -185,7 +185,7 @@ INFO  Attempting to build: .../counter
     Finished release [optimized] target(s) in Xs
 ```
 
-This compiles the Cell to WebAssembly. The binary `counter.wasm` is placed in `counter/target/wasm32-unknown-unknown/release/`.
+This compiles the Cell to WebAssembly. The binary `counter.wasm` is placed in `counter/target/wasm32v1-none/release/`.
 
 ### 4. Start a local runtime.
 
