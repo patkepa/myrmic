@@ -155,7 +155,7 @@ if [[ "$SKIP_TESTS" != "true" ]]; then
     fi
     rustup toolchain list | grep -q "^${CELL_TOOLCHAIN}" \
         || rustup toolchain install "$CELL_TOOLCHAIN" --profile minimal
-    rustup component add rust-src --toolchain "$CELL_TOOLCHAIN"
+    rustup target add wasm32v1-none --toolchain "$CELL_TOOLCHAIN"
 
     cargo nextest --version >/dev/null 2>&1 \
         || curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
