@@ -10064,7 +10064,6 @@ dependencies = [
  "futures",
  "introspection-common",
  "log",
- "myrmic-build",
  "myrmic-common",
  "myrmic-tags",
  "postcard",
