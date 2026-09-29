@@ -15,6 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+mod pacer;
+use pacer::PullPacer;
+
 /// How far behind "now" the announce baseline sits. Heads younger than this
 /// stay explicit, so peers that lag a few announce rounds still see them
 /// (and epoch bumps) directly instead of through a probed full announce.
@@ -645,6 +648,8 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             epoch_floors,
         };
         let mut pages = 0usize;
+        // The requester paces this transfer; see [`PullPacer`].
+        let mut pacer = PullPacer::new();
 
         loop {
             let page_started = Instant::now();
@@ -654,31 +659,38 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                 return false;
             };
 
+            let fetched = page_started.elapsed();
             let page_chunks = chunks.len();
+            let page_bytes: usize = chunks
+                .iter()
+                .map(|chunk| chunk_size(&chunk.entries) + CHUNK_WIRE_OVERHEAD)
+                .sum();
             if let Err(err) = self.apply_pull(scope, chunks).await {
                 // Partially applied; the holder's next announce drives a retry.
                 tracing::error!("unable to apply a pulled page: {}", err);
                 return true;
             }
             pages += 1;
+
+            let took = page_started.elapsed();
+            let rest = pacer.rest_after(took, page_bytes);
             tracing::debug!(
-                "[{}]({}) applied pull page {} ({} chunk(s)) from [{}]",
+                "[{}]({}) applied pull page {} ({} chunk(s), {} bytes) from [{}]: fetched in {:?}, applied in {:?}, resting {:?}",
                 me,
                 scope,
                 pages,
                 page_chunks,
+                page_bytes,
                 target,
+                fetched,
+                took.saturating_sub(fetched),
+                rest,
             );
 
             match next {
                 Some(cursor) => {
                     req.after = Some(cursor);
-                    // The requester paces this transfer: resting as long as
-                    // the page took to fetch and apply holds a deep pull to
-                    // half the holder's link and this node's storage, whatever
-                    // either can do, rather than a fixed rate that is flat out
-                    // for a small node and needlessly slow for a fast one.
-                    tokio::time::sleep(page_started.elapsed()).await;
+                    tokio::time::sleep(rest).await;
                 }
                 None => break,
             }

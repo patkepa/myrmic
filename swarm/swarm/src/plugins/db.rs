@@ -441,6 +441,7 @@ impl StoreContext {
                     // Store scans, off the async workers: a busy sync
                     // queryable must not starve the locate/tx queryables
                     // sharing the executor.
+                    let scan_started = std::time::Instant::now();
                     let served = tokio::task::spawn_blocking(move || match req {
                         sync::Request::Pull(req) => repl
                             .serve_pull(&req, db::replication::SYNC_PAGE_BYTES)
@@ -472,10 +473,20 @@ impl StoreContext {
                                 );
                             }
 
+                            let scanned = scan_started.elapsed();
                             let bytes = postcard::to_allocvec(&resp)
                                 .expect("unable to serialise sync response");
+                            let encoded = scan_started.elapsed().saturating_sub(scanned);
+                            let len = bytes.len();
                             if let Err(err) = query.reply(query.key_expr().clone(), bytes).await {
                                 tracing::warn!("unable to reply to a sync request: {}", err);
+                            }
+                            if pull_namespace.is_some() {
+                                tracing::debug!(
+                                    "served a pull page of {len} bytes: scanned in {scanned:?}, \
+                                     encoded in {encoded:?}, replied in {:?}",
+                                    scan_started.elapsed().saturating_sub(scanned + encoded),
+                                );
                             }
                         }
                         Err(err) => tracing::warn!("unable to serve a sync request: {}", err),
@@ -620,6 +631,7 @@ impl StoreContext {
         self.handle.spawn({
             let handle = self.handle.clone();
             let repl = repl.clone();
+            let subject = repl_subject.clone();
 
             async move {
                 // Held until the replicator stops, then dropped to undeclare them.
@@ -651,6 +663,14 @@ impl StoreContext {
                         }
                     })
                     .await;
+
+                // Whoever already holds the scope — typically a drain handing
+                // it over — announced before this node was listening, and
+                // won't again for seconds. Ask now, so the catch-up starts on
+                // the reply rather than on their next periodic announce.
+                if let models::Subject::Scope(scope) = &subject {
+                    repl.solicit(scope).await;
+                }
 
                 repl.stopped().await;
             }
