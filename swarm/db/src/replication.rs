@@ -728,6 +728,19 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             pages,
             target,
         );
+
+        // Caught up with the holder — typically a drain handing the scope
+        // over, which retires once a full replica vouches for every version it
+        // holds. Say so now, and in full: a floored announce elides older
+        // versions, so it could not retire the drain on its own.
+        if let Err(err) = self.send_announce(std::slice::from_ref(scope), false).await {
+            tracing::warn!(
+                "[{}]({}) unable to announce a finished pull: {}",
+                me,
+                scope,
+                err
+            );
+        }
         true
     }
 

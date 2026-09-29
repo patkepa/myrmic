@@ -100,12 +100,14 @@ impl StoreContext {
 
         tx.commit()?;
 
-        // Data committed to a scope this node doesn't replicate would strand
-        // here; offer it up to the nodes that do. A drain already running for
-        // the scope is woken rather than left to its periodic announce — a
-        // fresh one announces on its first iteration anyway.
+        // A scope this node replicates: its other replicas hear of the commit
+        // now. Data committed to a scope this node doesn't replicate would
+        // strand here; offer it up to the nodes that do. A drain already
+        // running for the scope is woken rather than left to its periodic
+        // announce — a fresh one announces on its first iteration anyway.
         for scope in scopes {
             if self.store.is_replicating(&scope) {
+                self.nudge_replication(&scope);
                 continue;
             }
 

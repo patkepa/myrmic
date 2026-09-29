@@ -33,14 +33,14 @@ const RUN_CAP: Duration = Duration::from_mins(10);
 /// least every 4s, and a hidden one never answers locate at all.
 const SETTLE: Duration = Duration::from_secs(5);
 
-fn bench_scope() -> Scope {
+pub(super) fn bench_scope() -> Scope {
     Scope::new("bench", "handoff", "public")
 }
 
-struct Load {
-    rows: usize,
-    value_bytes: usize,
-    rows_per_tx: usize,
+pub(super) struct Load {
+    pub(super) rows: usize,
+    pub(super) value_bytes: usize,
+    pub(super) rows_per_tx: usize,
 }
 
 impl Load {
@@ -78,7 +78,11 @@ fn digest(value: &[u8]) -> u64 {
 
 /// Commits the load into `scope`, `rows_per_tx` rows per transaction,
 /// returning how long that took and each row's value digest, by row id.
-async fn insert_rows(client: &Client, scope: &Scope, load: &Load) -> (Duration, Vec<u64>) {
+pub(super) async fn insert_rows(
+    client: &Client,
+    scope: &Scope,
+    load: &Load,
+) -> (Duration, Vec<u64>) {
     // Random values, so storage compression doesn't flatter the transfer.
     let mut rng = rand::rng();
     let mut digests = Vec::with_capacity(load.rows);
@@ -903,10 +907,12 @@ async fn handoff_timing() {
 /// scope it is handing over.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_drain_being_pulled_from_does_not_escalate() {
-    // Far shorter than the pull below, far longer than a gap between pages.
+    init_logging();
+    // Far shorter than the pull below, far longer than a gap between pages —
+    // including the occasional page that stalls for a second or so.
     let config = super::super::config::Config {
         store: super::super::config::StoreConfig {
-            offload_escalation_timeout: Some(Duration::from_millis(300)),
+            offload_escalation_timeout: Some(Duration::from_secs(2)),
             ..Default::default()
         },
         ..Default::default()
@@ -924,7 +930,7 @@ async fn a_drain_being_pulled_from_does_not_escalate() {
     locate_eventually(&replica, &scope, None).await;
 
     let load = Load {
-        rows: 20_000,
+        rows: 100_000,
         value_bytes: 256,
         rows_per_tx: 500,
     };
@@ -957,7 +963,7 @@ async fn a_drain_being_pulled_from_does_not_escalate() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     assert!(
-        started.elapsed() > Duration::from_secs(1),
+        started.elapsed() > Duration::from_secs(3),
         "the pull must outlast the escalation timeout for this to test anything"
     );
 

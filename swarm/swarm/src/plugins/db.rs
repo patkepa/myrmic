@@ -208,6 +208,9 @@ struct StoreContext {
     escalation_timeout: Duration,
     /// The running offloaders' signals, keyed by scope.
     offload_signals: Arc<Mutex<HashMap<models::Scope, Arc<DrainSignals>>>>,
+    /// "A commit just landed here" signals of the running single-scope
+    /// replicators, keyed by scope; see [`Self::nudge_replication`].
+    replica_nudges: Arc<Mutex<HashMap<models::Scope, Arc<Notify>>>>,
 }
 
 /// What can wake a running drain besides its own tick.
@@ -243,6 +246,21 @@ impl StoreContext {
             tx_idle_timeout,
             escalation_timeout,
             offload_signals: Arc::default(),
+            replica_nudges: Arc::default(),
+        }
+    }
+
+    /// Wakes the replicator of `scope`, if it replicates exactly that scope,
+    /// so its other replicas hear of a commit now rather than on the next
+    /// periodic announce, seconds out.
+    ///
+    /// Namespace-wide replicators (`sys`, `sorg`, `gw`) are not woken: an
+    /// announce rescans the replicator's whole subject, and those take commits
+    /// constantly.
+    pub fn nudge_replication(&self, scope: &models::Scope) {
+        let nudges = self.replica_nudges.lock().expect("nudge map poisoned");
+        if let Some(nudge) = nudges.get(scope) {
+            nudge.notify_one();
         }
     }
 
@@ -697,14 +715,31 @@ impl StoreContext {
             }
         });
 
+        let nudge = match &repl_subject {
+            models::Subject::Scope(scope) => {
+                let nudge = Arc::new(Notify::new());
+                self.replica_nudges
+                    .lock()
+                    .expect("nudge map poisoned")
+                    .insert(scope.clone(), nudge.clone());
+                Some((scope.clone(), nudge))
+            }
+            _ => None,
+        };
+
         // This "forces" the replicator to announce itself periodically.
         // Like the publisher, this will kill itself when the replicator shutsdown.
         self.handle.spawn({
             let repl = repl.clone();
+            let nudges = self.replica_nudges.clone();
 
             async move {
                 let interval = Duration::from_secs(2);
                 let jitter_range = 100..6000u64;
+                let nudged = async |nudge: &Option<(models::Scope, Arc<Notify>)>| match nudge {
+                    Some((_, nudge)) => nudge.notified().await,
+                    None => std::future::pending().await,
+                };
 
                 loop {
                     tracing::trace!("[{}] Sending announcement", me);
@@ -726,6 +761,19 @@ impl StoreContext {
                     tokio::select! {
                         () = tokio::time::sleep(sleep_time) => (),
                         () = repl.stopped() => break,
+                        // A commit landed: announce it now. Commits arriving
+                        // within the debounce ride the same announce, so write
+                        // traffic never becomes announce traffic one for one.
+                        () = nudged(&nudge) => tokio::time::sleep(NUDGE_DEBOUNCE).await,
+                    }
+                }
+
+                // Only this replicator's own entry: a successor for the same
+                // scope may already have registered its own.
+                if let Some((scope, nudge)) = &nudge {
+                    let mut nudges = nudges.lock().expect("nudge map poisoned");
+                    if nudges.get(scope).is_some_and(|n| Arc::ptr_eq(n, nudge)) {
+                        nudges.remove(scope);
                     }
                 }
             }
@@ -742,11 +790,12 @@ impl StoreContext {
 /// count gave at the base interval (8 ticks x 2s).
 const VERIFY_EVERY: Duration = Duration::from_secs(16);
 
-/// A commit that strands rows wakes the drain instead of leaving them for the
-/// periodic tick — but a burst of commits must not become a burst of announces,
-/// which is how the mesh has been wedged before. `Notify` coalesces everything
-/// arriving while the drain is busy into a single wake, and this window bounds
-/// what is left: at most one extra announce per window per scope.
+/// A commit wakes the drain it strands rows on, or the replicator of the scope
+/// it lands in, instead of leaving it for the periodic tick — but a burst of
+/// commits must not become a burst of announces, which is how the mesh has
+/// been wedged before. `Notify` coalesces everything arriving while the
+/// announcer is busy into a single wake, and this window bounds what is left:
+/// at most one extra announce per window per scope.
 const NUDGE_DEBOUNCE: Duration = Duration::from_millis(50);
 
 /// The drain loop of one offloader: announces, watches for coverage and the
