@@ -290,7 +290,7 @@ impl StoreContext {
             TransactionOptions::write()
         };
 
-        if matches!(finish, tx_apply::Finish::Commit) {
+        if !matches!(finish, tx_apply::Finish::KeepOpen) {
             let mut tx = self.store.begin_local(&opts).map_err(|err| {
                 tracing::error!("Unable to start transaction: {}", err);
                 Some(tx_apply::Error {
@@ -307,6 +307,15 @@ impl StoreContext {
                 }
             };
 
+            if matches!(finish, tx_apply::Finish::Rollback) {
+                tx.rollback();
+                return Ok(tx_apply::Response {
+                    tx: None,
+                    node: self.id().to_le_bytes(),
+                    last,
+                });
+            }
+
             self.finish_commit(tx).await.map_err(|err| {
                 tracing::error!("Failed to commit transaction: {:?}", err);
                 Some(tx_apply::Error {
@@ -315,7 +324,11 @@ impl StoreContext {
                 })
             })?;
 
-            return Ok(tx_apply::Response { tx: None, last });
+            return Ok(tx_apply::Response {
+                tx: None,
+                node: self.id().to_le_bytes(),
+                last,
+            });
         }
 
         opts.idle_timeout = Some(self.tx_idle_timeout);
@@ -332,6 +345,7 @@ impl StoreContext {
 
         Ok(tx_apply::Response {
             tx: Some(tx_id),
+            node: self.id().to_le_bytes(),
             last,
         })
     }
@@ -345,7 +359,7 @@ impl StoreContext {
         ops: Vec<TxOp>,
         finish: tx_apply::Finish,
     ) -> Result<tx_apply::Response, Option<tx_apply::Error>> {
-        if matches!(finish, tx_apply::Finish::Commit) {
+        if !matches!(finish, tx_apply::Finish::KeepOpen) {
             let mut tx = self.remove_tx(id).ok_or_else(|| {
                 tracing::warn!("Unable to find tx");
                 None
@@ -359,6 +373,15 @@ impl StoreContext {
                 }
             };
 
+            if matches!(finish, tx_apply::Finish::Rollback) {
+                tx.rollback();
+                return Ok(tx_apply::Response {
+                    tx: None,
+                    node: self.id().to_le_bytes(),
+                    last,
+                });
+            }
+
             self.finish_commit(tx).await.map_err(|err| {
                 tracing::error!("Failed to commit transaction: {:?}", err);
                 Some(tx_apply::Error {
@@ -367,12 +390,20 @@ impl StoreContext {
                 })
             })?;
 
-            return Ok(tx_apply::Response { tx: None, last });
+            return Ok(tx_apply::Response {
+                tx: None,
+                node: self.id().to_le_bytes(),
+                last,
+            });
         }
 
         let last = self.apply_registered(id, ops)?;
 
-        Ok(tx_apply::Response { tx: Some(id), last })
+        Ok(tx_apply::Response {
+            tx: Some(id),
+            node: self.id().to_le_bytes(),
+            last,
+        })
     }
 
     /// Applies to a registered transaction, leaving it open. On failure the

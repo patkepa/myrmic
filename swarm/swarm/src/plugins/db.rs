@@ -959,15 +959,23 @@ async fn drive_offload(
     // releases nothing.
     //
     // Unfindable first: a drain still answering locate while it releases
-    // would route reads to a copy that is disappearing under them.
+    // would route reads to a copy that is disappearing under them. Then a
+    // grace, for reads that located it just before: one that has begun reads
+    // its own snapshot, but one still on its way would begin on a copy
+    // already half gone.
     drop(queryable);
     if retired {
         if covered.is_empty() {
             covered = repl.take_confirmed_coverage();
         }
+        tokio::time::sleep(RELEASE_GRACE).await;
         release_offloaded(&context, &scope, &covered, me).await;
     }
 }
+
+/// How long a retired drain keeps its copy after going unfindable: several
+/// locate rounds, so a read routed to it in its last moments has begun.
+const RELEASE_GRACE: Duration = Duration::from_secs(2);
 
 /// Unregisters a stopped drain's signals — only its own: a successor for the
 /// same scope may already have registered its own.

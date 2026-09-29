@@ -658,50 +658,53 @@ async fn read_storm(
 
     while start.elapsed() < window {
         let began = start.elapsed();
-        let tx = client
-            .send(models::tx_begin::Request {
-                constraint: models::tx_begin::Constraint::Routed(scope.clone()),
-                access: models::tx_begin::Access::Read,
-                ..Default::default()
-            })
-            .await
-            .expect("send failed")
-            .expect("tx begin failed");
-
-        let count = client
-            .send(models::tb_count::Request {
-                id: tx.id,
-                op: models::tb_count::Op {
-                    scope: scope.clone(),
-                    table: ROWS_TABLE.into(),
-                },
-            })
-            .await
-            .expect("send failed")
-            .expect("count failed")
-            .count;
-
-        client
-            .send(models::tx_rollback::Request { id: tx.id })
-            .await
-            .expect("send failed")
-            .expect("rollback failed");
+        let (node, count) = routed_count(client, scope).await;
 
         storm.reads += 1;
-        if tx.id.2 == source {
+        if node == source {
             storm.on_source += 1;
         } else {
             storm.on_target += 1;
         }
         if count < rows {
-            storm.short.push((began, tx.id.2, count));
+            storm.short.push((began, node, count));
         }
-        storm.timeline.push((began, tx.id.2, count));
+        storm.timeline.push((began, node, count));
 
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     storm
+}
+
+/// One routed count of the scope in a single rolled-back application, as a
+/// client would read it: the node that served it, and what it counted.
+async fn routed_count(client: &Client, scope: &Scope) -> (NodeId, usize) {
+    let applied = client
+        .send(models::tx_apply::Request {
+            target: models::tx_apply::Target::New {
+                constraint: models::tx_begin::Constraint::Routed(scope.clone()),
+                access: models::tx_begin::Access::Read,
+                retention_period: None,
+            },
+            ops: vec![models::TxOp::from(models::tb_count::Op {
+                scope: scope.clone(),
+                table: ROWS_TABLE.into(),
+            })],
+            finish: models::tx_apply::Finish::Rollback,
+        })
+        .await
+        .expect("send failed")
+        .expect("count failed");
+
+    let count = applied
+        .last
+        .map(models::tb_count::Response::try_from)
+        .expect("a count was applied")
+        .expect("the response is the count's")
+        .count;
+
+    (applied.node, count)
 }
 
 /// The read-back, with what locate said just before it: who answered, and

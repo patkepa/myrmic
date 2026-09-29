@@ -1022,6 +1022,65 @@ async fn application_commits_ops_in_one_round_trip_and_publishes_one_event() {
     );
 }
 
+/// A rolled-back application answers from what it applied — its own writes
+/// included — and leaves nothing behind: no rows, no open transaction.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rolled_back_application_answers_and_keeps_nothing() {
+    let (session, _drop_tx) = start_node().await;
+    let client = Client::new(&session);
+
+    client
+        .send(models::tx_apply::Request::commit_new(
+            models::tx_begin::Constraint::Routed(scope()),
+            vec![append(b"1", b"a")],
+        ))
+        .await
+        .expect("send failed")
+        .expect("apply failed");
+
+    let applied = client
+        .send(models::tx_apply::Request {
+            target: models::tx_apply::Target::New {
+                constraint: models::tx_begin::Constraint::Routed(scope()),
+                access: models::tx_begin::Access::Write,
+                retention_period: None,
+            },
+            ops: vec![
+                append(b"2", b"b"),
+                models::TxOp::from(models::tb_count::Op {
+                    scope: scope(),
+                    table: TABLE.into(),
+                }),
+            ],
+            finish: models::tx_apply::Finish::Rollback,
+        })
+        .await
+        .expect("send failed")
+        .expect("apply failed");
+    assert!(applied.tx.is_none(), "nothing is left open to close");
+    assert_eq!(applied.node, node_id(&session), "it says where it ran");
+    let counted = applied
+        .last
+        .map(models::tb_count::Response::try_from)
+        .expect("the count answered")
+        .expect("a count response");
+    assert_eq!(
+        counted.count, 2,
+        "the count sees the application's own write"
+    );
+
+    assert_eq!(
+        read_letter(&client, b"2").await,
+        None,
+        "the write was rolled back"
+    );
+    assert_eq!(
+        read_letter(&client, b"1").await.as_deref(),
+        Some(b"a".as_slice()),
+        "what was committed before is untouched"
+    );
+}
+
 /// The tail rule end to end: deferred writes, a read that flushes them, then a
 /// commit — all one transaction, and the read sees what has not committed yet.
 #[tokio::test(flavor = "multi_thread")]

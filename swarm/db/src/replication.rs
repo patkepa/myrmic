@@ -675,6 +675,9 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         let mut pages = 0usize;
         // The requester paces this transfer; see [`PullPacer`].
         let mut pacer = PullPacer::new();
+        // The oldest pulled version as a floored announce would judge it:
+        // elided once both its timestamp and epoch fall behind the cut.
+        let mut oldest = models::Version::MAX;
 
         loop {
             let page_started = Instant::now();
@@ -690,6 +693,9 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                 .iter()
                 .map(|chunk| chunk_size(&chunk.entries) + CHUNK_WIRE_OVERHEAD)
                 .sum();
+            for &(epoch, ts, _) in chunks.iter().map(|chunk| &chunk.id) {
+                oldest = oldest.min(ts.max(epoch));
+            }
             if let Err(err) = self.apply_pull(scope, chunks).await {
                 // Partially applied; the holder's next announce drives a retry.
                 tracing::error!("unable to apply a pulled page: {}", err);
@@ -731,9 +737,19 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
 
         // Caught up with the holder — typically a drain handing the scope
         // over, which retires once a full replica vouches for every version it
-        // holds. Say so now, and in full: a floored announce elides older
-        // versions, so it could not retire the drain on its own.
-        if let Err(err) = self.send_announce(std::slice::from_ref(scope), false).await {
+        // holds. Say so now. A floored announce lists every version newer than
+        // the announce lag explicitly, which is all a drain of fresh rows
+        // needs; only a pull that delivered older ones — a scope handed over
+        // with its history — needs the full announce to vouch for them.
+        let lag_cut = self
+            .store
+            .now()
+            .saturating_sub(uhlc::NTP64::from(self.lag).0);
+        let floored = oldest > lag_cut;
+        if let Err(err) = self
+            .send_announce(std::slice::from_ref(scope), floored)
+            .await
+        {
             tracing::warn!(
                 "[{}]({}) unable to announce a finished pull: {}",
                 me,
