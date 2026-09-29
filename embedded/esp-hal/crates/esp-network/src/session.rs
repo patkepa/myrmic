@@ -542,19 +542,19 @@ async fn get_peer_addr(
     reason = "malformed startup credentials cannot be used to initialize WiFi"
 )]
 fn station_config(credentials: &WifiCredentials) -> Config {
+    let ssid = credentials
+        .ssid
+        .as_str()
+        .try_into()
+        .expect("SSID exceeds the driver limit");
+    let password = credentials
+        .password
+        .as_str()
+        .try_into()
+        .expect("password exceeds the driver limit");
     let config = StationConfig::default()
-        .with_ssid(
-            credentials
-                .ssid()
-                .try_into()
-                .expect("SSID exceeds the driver limit"),
-        )
-        .with_authentication(AuthenticationMethodConfig::Wpa2Personal(
-            credentials
-                .password()
-                .try_into()
-                .expect("password exceeds the driver limit"),
-        ));
+        .with_ssid(ssid)
+        .with_authentication(AuthenticationMethodConfig::Wpa2Personal(password));
 
     Config::Station(config)
 }
