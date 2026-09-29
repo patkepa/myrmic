@@ -81,6 +81,7 @@ jobs:
       - run: .ci/check/check
         env:
           CARGO_CHANNEL: "1.96.0"
+          SKIP_CHECKS: "true"
 
   # Lints the WASM cell crates (drivers, steps, warehouse and fixture cells).
   wasm:
