@@ -124,10 +124,15 @@ pub fn init_stack(
 /// session-scoped services future (the caller composes what runs on the
 /// session), which is then driven alongside the supervision loop; `liveness`
 /// is invoked once per liveness round.
+///
+/// `session_up` reports whether a session is established, so the firmware can
+/// show what the node has reached: it is called with `true` where [`CONNECTED`]
+/// is signalled and with `false` whenever the loop is back to establishing one.
 pub async fn zenoh_session<F, Fut>(
     stack: embassy_net::Stack<'static>,
     on_session: F,
     liveness: fn(),
+    session_up: fn(bool),
 ) where
     F: FnOnce(Session<'static, NoopRawMutex>) -> Fut,
     Fut: core::future::Future<Output = ()>,
@@ -180,6 +185,10 @@ pub async fn zenoh_session<F, Fut>(
             // Liveness (observed): blocks on link state for unbounded time.
             liveness();
 
+            // The loop only comes back here with no session: `run` below holds
+            // it for as long as one lives.
+            session_up(false);
+
             if link_dropped {
                 stack.wait_config_down().await;
                 link_dropped = false;
@@ -209,6 +218,7 @@ pub async fn zenoh_session<F, Fut>(
                 Ok(s) => {
                     // Make known to the rest of the system that we are connected
                     CONNECTED.signal(());
+                    session_up(true);
                     s
                 }
                 Err(e) => {
@@ -254,8 +264,14 @@ pub async fn zenoh_session<F, Fut>(
 }
 
 /// Establishes and keeps a WiFi connection. `liveness` is invoked once per
-/// liveness round.
-pub async fn connection(mut controller: WifiController<'static>, liveness: fn()) {
+/// liveness round, and `associated` reports whether the station is joined to
+/// its access point — this task owns the controller, so it is the only place
+/// that knows.
+pub async fn connection(
+    mut controller: WifiController<'static>,
+    liveness: fn(),
+    associated: fn(bool),
+) {
     log::info!("start connection task");
 
     log::info!("Scan");
@@ -276,6 +292,7 @@ pub async fn connection(mut controller: WifiController<'static>, liveness: fn())
         if controller.is_connected() {
             // wait until we're no longer connected
             let info = controller.wait_for_disconnect_async().await.ok();
+            associated(false);
             log::info!("Disconnected: {:?}", info);
             Timer::after(WIFI_RECONNECT_BACKOFF).await;
         }
@@ -283,8 +300,12 @@ pub async fn connection(mut controller: WifiController<'static>, liveness: fn())
         log::info!("About to connect...");
 
         match controller.connect_async().await {
-            Ok(info) => log::info!("Wifi connected to {:?}", info),
+            Ok(info) => {
+                associated(true);
+                log::info!("Wifi connected to {:?}", info);
+            }
             Err(e) => {
+                associated(false);
                 if let ConnectionError::Failed(info) = e
                     && matches!(info.reason, DisconnectReason::AuthenticationExpired)
                 {
