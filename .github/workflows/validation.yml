@@ -74,14 +74,13 @@ jobs:
   msrv:
     name: MSRV
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    container: ghcr.io/peeriot/rust:1.98.1-1
+    container: ghcr.io/peeriot/rust:1.96.0
     steps:
       - uses: peeriot/actions/setup-rust@a83fea7814b7cf873fd153a725c4889ecfa76a2c
       - uses: actions/checkout@v6
-      - run: rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt
       - run: .ci/check/check
         env:
-          CARGO_CHANNEL: "1.94.0"
+          CARGO_CHANNEL: "1.96.0"
 
   # Lints the WASM cell crates (drivers, steps, warehouse and fixture cells).
   wasm:
