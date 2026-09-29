@@ -455,8 +455,15 @@ async fn reconcile(
 
     // A stopped subject's local data must not stay stranded; offer it up now
     // rather than waiting for the stray-scan backstop. What a dropped subject
-    // covers is a full copy, and stays findable until its successor has it.
+    // covers is a full copy, and stays findable until its successor has it —
+    // including through a hidden drain already running for it, left over from
+    // rows that landed before this node started replicating.
     if !dropped.is_empty() {
+        for scope in context.store.offloading_scopes() {
+            if dropped.iter().any(|subject| subject.contains(&scope)) {
+                context.expose_offload(&scope);
+            }
+        }
         for scope in super::stray_scopes(context).await {
             let kind = if dropped.iter().any(|subject| subject.contains(&scope)) {
                 OffloadKind::Dropped

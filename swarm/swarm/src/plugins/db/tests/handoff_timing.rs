@@ -15,7 +15,10 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt as _;
 use rand::RngCore as _;
 
-use super::{locate_eventually, node_id, start_connected_pair};
+use super::{
+    custody_key, locate_eventually, node_id, read_custody_row, start_connected_pair,
+    start_connected_pair_with,
+};
 use cell_protocol::replication::{
     REPLICATION_TABLE, ReplicaEntry, ReplicaSelector, replication_scope, runtime_tag,
 };
@@ -344,6 +347,24 @@ async fn hear_offload_announces(
         .expect("unable to subscribe to the replica channel");
 
     (subscriber, rx)
+}
+
+type Node = (zenoh::Session, swarm_api::DropSender);
+
+/// Orders a pair as (source, target). A `sys` write routes to the rendezvous
+/// winner among equally caught-up holders, so making that node the source is
+/// what lands the handoff write there — the target then only learns of it by
+/// replication.
+fn source_and_target((a, b): (Node, Node)) -> (Node, Node) {
+    let draw = |session: &zenoh::Session| {
+        let id = node_id(session);
+        (rendezvous_hash(&replication_scope(), &id), id)
+    };
+    if draw(&a.0) > draw(&b.0) {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 fn entry_for(session: &zenoh::Session) -> ReplicaEntry {
@@ -770,20 +791,8 @@ fn print_latency(label: &str, values: &[Duration]) {
 async fn handoff_timing() {
     init_logging();
     let load = Load::from_env();
-    let (a, b) = start_connected_pair().await;
-
-    // A `sys` write routes to the rendezvous winner among equally caught-up
-    // holders, so making that node the source is what lands the handoff
-    // write there — the target then only learns of it by replication.
-    let draw = |session: &zenoh::Session| {
-        let id = node_id(session);
-        (rendezvous_hash(&replication_scope(), &id), id)
-    };
-    let ((source, _source_drop), (target, _target_drop)) = if draw(&a.0) > draw(&b.0) {
-        (a, b)
-    } else {
-        (b, a)
-    };
+    let ((source, _source_drop), (target, _target_drop)) =
+        source_and_target(start_connected_pair().await);
     let source_id = node_id(&source);
     let target_id = node_id(&target);
 
@@ -885,5 +894,85 @@ async fn handoff_timing() {
     assert!(
         watch.retired,
         "the handoff did not finish within {RUN_CAP:?}"
+    );
+}
+
+/// A drain whose data a replica is pulling is not stranded, however long the
+/// pull runs: escalation counts from the last fetch, not from the drain's
+/// start. Escalating would promote the source into a custodian of the very
+/// scope it is handing over.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_drain_being_pulled_from_does_not_escalate() {
+    // Far shorter than the pull below, far longer than a gap between pages.
+    let config = super::super::config::Config {
+        store: super::super::config::StoreConfig {
+            offload_escalation_timeout: Some(Duration::from_millis(300)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ((source, _source_drop), (target, _target_drop)) =
+        source_and_target(start_connected_pair_with(&config).await);
+    let (source_id, target_id) = (node_id(&source), node_id(&target));
+
+    let client = Client::new(&source);
+    let scope = bench_scope();
+    let replica = db_client::replica_v1::Client::new(&source, Subject::Scope(scope.clone()))
+        .expect("unable to create replica client");
+
+    write_entry_on(&client, source_id, &entry_for(&source)).await;
+    locate_eventually(&replica, &scope, None).await;
+
+    let load = Load {
+        rows: 20_000,
+        value_bytes: 256,
+        rows_per_tx: 500,
+    };
+    insert_rows(&client, &scope, &load).await;
+    let head = replica
+        .locate(&scope, None)
+        .await
+        .expect("locate failed")
+        .iter()
+        .find(|holder| holder.id == source_id)
+        .map(|holder| holder.head)
+        .expect("the source should answer locate");
+
+    let started = Instant::now();
+    write_entry_on(&client, source_id, &entry_for(&target)).await;
+
+    // Pulled over: the target answers at the source's head.
+    let holders = loop {
+        let holders = replica.locate(&scope, None).await.expect("locate failed");
+        if holders
+            .iter()
+            .any(|holder| holder.id == target_id && holder.head >= head)
+        {
+            break holders;
+        }
+        assert!(
+            started.elapsed() < Duration::from_mins(1),
+            "the pull did not finish"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(
+        started.elapsed() > Duration::from_secs(1),
+        "the pull must outlast the escalation timeout for this to test anything"
+    );
+
+    // The pull ran many timeouts long, and the source never took the scope
+    // back. (Retiring afterwards waits on an announce, which the production
+    // timeout covers and this one does not, so that part is not tested.)
+    assert!(
+        holders
+            .iter()
+            .all(|holder| holder.id != source_id || matches!(holder.state, HolderState::Draining)),
+        "the source escalated back into a replica mid-pull"
+    );
+    let custody = read_custody_row(&client, &custody_key(&source, &scope)).await;
+    assert!(
+        custody.is_none(),
+        "the source escalated into a custodian mid-pull"
     );
 }

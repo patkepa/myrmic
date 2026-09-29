@@ -152,6 +152,9 @@ pub struct Replicator<T: ReplicaTransport, M = ()> {
     /// announces from the same holder don't stack duplicate pulls.
     pulling: Arc<dashmap::DashMap<(models::NodeId, api::Scope), ()>>,
     frontier: Arc<FrontierCache>,
+    /// What an offloader's announce-based retirement was confirmed to cover:
+    /// the frontier a full replica's announce vouched for, version by version.
+    covered: Arc<std::sync::Mutex<Vec<models::SyncPointId>>>,
 }
 
 /// Holds one (holder, scope) pull slot; the slot frees on drop.
@@ -178,6 +181,7 @@ impl<T: ReplicaTransport, M> Clone for Replicator<T, M> {
             probes: self.probes.clone(),
             pulling: self.pulling.clone(),
             frontier: self.frontier.clone(),
+            covered: self.covered.clone(),
         }
     }
 }
@@ -208,6 +212,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             probes: Default::default(),
             pulling: Default::default(),
             frontier: Default::default(),
+            covered: Default::default(),
         };
 
         let handle = ReplicationHandle { stopped };
@@ -224,6 +229,13 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
     /// Waits until the replicator has confirmed it is stopping.
     pub async fn stopped(&self) {
         self.stopped.cancelled().await;
+    }
+
+    /// The sync points an announce-based retirement confirmed a full replica
+    /// holds, taken so a retired drain can release exactly those. Empty unless
+    /// this offloader retired that way.
+    pub fn take_confirmed_coverage(&self) -> Vec<models::SyncPointId> {
+        std::mem::take(&mut *self.covered.lock().expect("coverage lock poisoned"))
     }
 
     async fn request_changeset(
@@ -575,9 +587,11 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
     /// prefix cannot vouch for individual versions, so old holdings retire off
     /// the full announces our own announce's probe solicits.
     async fn handle_coverage(&self, sender: uhlc::ID, announce: Announce) -> anyhow::Result<()> {
+        // The frontier checked is exactly what the announce vouched for, so
+        // it is also exactly what a retirement on it may release.
         let covered = if announce.full_replica {
             let frontiers = self.frontiers().await?;
-            frontiers.scopes.iter().all(|(scope, frontier)| {
+            let all_held = frontiers.scopes.iter().all(|(scope, frontier)| {
                 frontier.iter().all(|(ts, &(epoch, _))| {
                     announce
                         .known
@@ -585,9 +599,17 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                         .and_then(|sa| sa.heads.get(ts))
                         .is_some_and(|&(their_epoch, _)| their_epoch >= epoch)
                 })
+            });
+            all_held.then(|| {
+                frontiers
+                    .scopes
+                    .iter()
+                    .flat_map(|(_, frontier)| frontier.iter())
+                    .map(|(&ts, &(epoch, node))| (epoch, ts, node))
+                    .collect::<Vec<_>>()
             })
         } else {
-            false
+            None
         };
 
         self.store.record_peer_frontier(
@@ -596,7 +618,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             announce.full_replica,
         );
 
-        if covered {
+        if let Some(points) = covered {
             let me = self.store.node_id();
             let (namespace, database, schema) = self.subject.as_keyexprs();
             tracing::debug!(
@@ -607,6 +629,9 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                 schema,
                 sender,
             );
+            // Recorded before the shutdown it justifies, so the drain sees it
+            // as soon as it wakes.
+            *self.covered.lock().expect("coverage lock poisoned") = points;
             self.confirm_shutdown();
         }
 

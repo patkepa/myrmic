@@ -41,6 +41,16 @@ async fn start_connected_pair() -> (
     (zenoh::Session, swarm_api::DropSender),
     (zenoh::Session, swarm_api::DropSender),
 ) {
+    start_connected_pair_with(&Default::default()).await
+}
+
+/// [`start_connected_pair`], both nodes running `config`.
+async fn start_connected_pair_with(
+    config: &super::config::Config,
+) -> (
+    (zenoh::Session, swarm_api::DropSender),
+    (zenoh::Session, swarm_api::DropSender),
+) {
     // Bound and released to find a free port; a bind racing another process
     // for it is accepted for a test.
     let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -50,15 +60,19 @@ async fn start_connected_pair() -> (
         .port();
     let endpoints = format!(r#"["tcp/127.0.0.1:{port}"]"#);
 
-    let listener = start_node_on(|config| {
-        config.insert_json5("listen/endpoints", &endpoints).unwrap();
-    })
+    let listener = start_node_on(
+        |zenoh| {
+            zenoh.insert_json5("listen/endpoints", &endpoints).unwrap();
+        },
+        config.clone(),
+    )
     .await;
-    let connector = start_node_on(|config| {
-        config
-            .insert_json5("connect/endpoints", &endpoints)
-            .unwrap();
-    })
+    let connector = start_node_on(
+        |zenoh| {
+            zenoh.insert_json5("connect/endpoints", &endpoints).unwrap();
+        },
+        config.clone(),
+    )
     .await;
 
     (listener, connector)
@@ -86,18 +100,19 @@ fn ctx(session: &zenoh::Session, drop_rx: swarm_api::DropNotifier) -> MyrmicCtx 
 }
 
 async fn start_node() -> (zenoh::Session, swarm_api::DropSender) {
-    start_node_on(|_| {}).await
+    start_node_on(|_| {}, Default::default()).await
 }
 
-/// [`start_node`] on a session configured by `configure`.
+/// [`start_node`] running `config`, on a session configured by `configure`.
 async fn start_node_on(
     configure: impl FnOnce(&mut zenoh::Config),
+    config: super::config::Config,
 ) -> (zenoh::Session, swarm_api::DropSender) {
     let session = open_session_with(configure).await;
 
     let (drop_tx, drop_rx) = flume::bounded(1);
 
-    Plugin::main(ctx(&session, drop_rx), Default::default())
+    Plugin::main(ctx(&session, drop_rx), config)
         .await
         .expect("unable to start db plugin");
 
@@ -775,6 +790,76 @@ async fn dropping_replication_stops_locate_and_starts_offloading() {
         if announce.known.contains_key(&scope()) {
             announces += 1;
         }
+    }
+}
+
+/// Rows committed before a node replicates their scope start a hidden drain,
+/// which only stands down on its next tick. A replica dropped inside that
+/// window must still leave its full copy findable.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replica_dropped_beside_a_leftover_hidden_drain_stays_findable() {
+    let (session, _drop_tx) = start_node().await;
+    let client = Client::new(&session);
+
+    let tx = client
+        .send(models::tx_begin::Request::default())
+        .await
+        .expect("send failed")
+        .expect("tx begin failed");
+    insert_one(&client, tx.id, &scope()).await;
+    client
+        .send(models::tx_commit::Request { id: tx.id })
+        .await
+        .expect("send failed")
+        .expect("commit failed");
+
+    replicate(&client, &session, Subject::Scope(scope())).await;
+    let replica = db_client::replica_v1::Client::new(&session, Subject::Scope(scope()))
+        .expect("unable to create replica client");
+    locate_eventually(&replica, &scope(), None).await;
+
+    // Dropped straight away, while the stray drain is likely still running.
+    let selector = ReplicaSelector::Subject(Subject::Scope(scope()));
+    let label = selector.to_string();
+    let entry = ReplicaEntry::new(selector, vec![String::from("tag:nobody")], &label);
+    let tx = client
+        .send(models::tx_begin::Request::default())
+        .await
+        .expect("send failed")
+        .expect("tx begin failed");
+    client
+        .send(models::tb_insert::Request {
+            id: tx.id,
+            op: models::tb_insert::Op {
+                scope: replication_scope(),
+                table: REPLICATION_TABLE.into(),
+                eid: Some(entry.key().into_bytes()),
+                value: postcard::to_allocvec(&entry).expect("entry should serialise"),
+            },
+        })
+        .await
+        .expect("send failed")
+        .expect("insert failed");
+    client
+        .send(models::tx_commit::Request { id: tx.id })
+        .await
+        .expect("send failed")
+        .expect("commit failed");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let holders = replica.locate(&scope(), None).await.expect("locate failed");
+        if let [holder] = holders.as_slice()
+            && matches!(holder.state, models::locate::HolderState::Draining)
+        {
+            break;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the dropped replica's copy must stay findable as a drain"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
