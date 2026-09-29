@@ -25,7 +25,7 @@ jobs:
   guidelines:
     name: Guidelines
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    container: ghcr.io/peeriot/rust:1.98.1-1
+    container: ghcr.io/peeriot/rust:1.98.1-2
     concurrency:
       group: guidelines-${{ github.ref }}
       cancel-in-progress: true
@@ -43,7 +43,7 @@ jobs:
   tests:
     name: Tests
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    container: ghcr.io/peeriot/rust:1.98.1-1
+    container: ghcr.io/peeriot/rust:1.98.1-2
     concurrency:
       group: tests-${{ github.ref }}
       cancel-in-progress: true
@@ -63,7 +63,7 @@ jobs:
   licenses:
     name: Licenses
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    container: ghcr.io/peeriot/rust:1.98.1-1
+    container: ghcr.io/peeriot/rust:1.98.1-2
     steps:
       - uses: peeriot/actions/setup-rust@a83fea7814b7cf873fd153a725c4889ecfa76a2c
       - uses: actions/checkout@v6
@@ -87,21 +87,18 @@ jobs:
   wasm:
     name: WASM
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    container: ghcr.io/peeriot/rust:1.98.1-1
+    container: ghcr.io/peeriot/rust:1.98.1-2
     steps:
       - uses: peeriot/actions/setup-rust@a83fea7814b7cf873fd153a725c4889ecfa76a2c
       - uses: actions/checkout@v6
-      - run: rustup toolchain install nightly-2026-08-07 --profile minimal --component rust-src --component clippy
       - run: .ci/check/wasm
-        env:
-          CARGO_CHANNEL: nightly-2026-08-07
 
   # Builds and lints the firmware for each chip, then, for c6 only, verifies
   # the production image exposes no cell-callable watchdog control surface.
   embedded:
     name: Embedded ${{ matrix.chip }}
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    container: ghcr.io/peeriot/rust-riscv32imac-unknown-none-elf:1.98.1-1
+    container: ghcr.io/peeriot/rust-riscv32imac-unknown-none-elf:1.98.1-2
     strategy:
       fail-fast: false
       matrix:
@@ -118,14 +115,10 @@ jobs:
   scaffold:
     name: Pipeline Scaffold
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    container: ghcr.io/peeriot/rust-riscv32imac-unknown-none-elf:1.98.1-1
+    container: ghcr.io/peeriot/rust-riscv32imac-unknown-none-elf:1.98.1-2
     steps:
       - uses: peeriot/actions/setup-rust@a83fea7814b7cf873fd153a725c4889ecfa76a2c
       - uses: actions/checkout@v6
         with:
           submodules: true
-      - run: rustup toolchain install nightly-2026-08-07 --profile minimal --component rust-src
-      - run: rustup target add riscv32imac-unknown-none-elf --toolchain nightly-2026-08-07
       - run: .ci/check/pipeline-scaffold
-        env:
-          CARGO_CHANNEL: nightly-2026-08-07

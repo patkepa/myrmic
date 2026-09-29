@@ -380,7 +380,7 @@ fn artifact_from_path(path: &std::path::Path) -> crate::cell::CellArtifact {
     };
 
     let wasm_path = target_dir
-        .join("wasm32-unknown-unknown/release")
+        .join("wasm32v1-none/release")
         .join(format!("{module_name}.wasm"));
 
     crate::cell::CellArtifact {

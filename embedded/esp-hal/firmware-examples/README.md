@@ -16,7 +16,7 @@ directory to start a new firmware crate.
 cd embedded/esp-hal
 cargo build -p firmware-examples --bin native-cell \
   --release --target riscv32imac-unknown-none-elf \
-  --no-default-features --features esp32c6 -Zbuild-std=core,alloc
+  --no-default-features --features esp32c6
 ```
 
 ## What makes this a firmware crate

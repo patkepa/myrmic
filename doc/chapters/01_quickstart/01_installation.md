@@ -27,16 +27,15 @@ You need all of these whether you installed the CLI from a package or built it y
   source "$HOME/.cargo/env"
   ```
 
-- **The pinned nightly toolchain, the `wasm32-unknown-unknown` target and the `rust-src` component** are all installed for you on the first build. A cell scaffolded by `myrmic new`, on its first `myrmic build`, ships a `rust-toolchain.toml` that prompts `rustup` to auto-install the right toolchain and its components.
+- **The pinned stable toolchain and the `wasm32v1-none` target** are installed for you on the first build. A cell scaffolded by `myrmic new`, on its first `myrmic build`, ships a `rust-toolchain.toml` that prompts `rustup` to auto-install the right toolchain and target.
 
-  The pinned date is not a technical floor; it is the latest nightly tested for the current Myrmic release, and it moves forward with each release.
+  The pinned version is not a technical floor; it is the release tested for the current Myrmic release, and it moves forward with each release.
 
   To install these ahead of that first build - on an offline machine, or just to keep the build output quiet - the steps are optional:
 
   ```sh
-  rustup toolchain install nightly-2026-08-07
-  rustup target add wasm32-unknown-unknown --toolchain nightly-2026-08-07
-  rustup component add rust-src --toolchain nightly-2026-08-07
+  rustup toolchain install 1.97.0
+  rustup target add wasm32v1-none --toolchain 1.97.0
   ```
 
 - **A C toolchain.** A cell compiles to WebAssembly, but cargo still compiles and links every dependency's build script as a native binary for your machine. rustup ships no linker, so without one `myrmic build` stops before it starts the build, with `no C linker found`.
