@@ -56,8 +56,10 @@
 //!
 //! #[esp_firmware::main]
 //! async fn setup(board: &mut Board) {
-//!     if let Some((ssid, password)) = load_saved_wifi_credentials() {
-//!         board.set_wifi_credentials(WifiCredentials::new(ssid, password)).unwrap();
+//!     if let Some((ssid, password)) = load_saved_wifi_credentials()
+//!         && let Ok(credentials) = WifiCredentials::new(ssid, password)
+//!     {
+//!         board.set_wifi_credentials(credentials).unwrap();
 //!     }
 //! }
 //! ```
@@ -129,7 +131,7 @@ mod ble;
 pub use board::Board;
 pub use cell::{Cell, Message, Network, RegisterError, Registration, SendError};
 pub use config::Config;
-pub use esp_common::esp_network::WifiCredentials;
+pub use esp_common::esp_network::{WifiCredentials, WifiCredentialsError};
 pub use outlet::Outlet;
 pub use tap::{DeclareError, EventTap, Tap};
 
