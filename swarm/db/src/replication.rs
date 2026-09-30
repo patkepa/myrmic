@@ -735,17 +735,19 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             target,
         );
 
-        // Caught up with the holder — typically a drain handing the scope
-        // over, which retires once a full replica vouches for every version it
-        // holds. Say so now. A floored announce lists every version newer than
-        // the announce lag explicitly, which is all a drain of fresh rows
-        // needs; only a pull that delivered older ones — a scope handed over
-        // with its history — needs the full announce to vouch for them.
+        // Caught up with the drain, which retires once a full replica vouches
+        // for every version it holds. A handoff — history, or more than a page
+        // of it — is vouched for now. A sink's trickle of fresh rows waits for
+        // our periodic announce: under load that is thousands of pulls, and
+        // an announce each costs every peer a frontier scan.
         let lag_cut = self
             .store
             .now()
             .saturating_sub(uhlc::NTP64::from(self.lag).0);
         let floored = oldest > lag_cut;
+        if floored && pages == 1 {
+            return true;
+        }
         if let Err(err) = self
             .send_announce(std::slice::from_ref(scope), floored)
             .await
