@@ -86,9 +86,43 @@ pub trait ReplicaTransport: Clone + Send + Sync + 'static {
         }
     }
 
-    /// An announce is about to be published, and why; for metrics.
-    fn announcing(&self, reason: AnnounceReason) {
+    /// Publishes an announce; `reason` is why it went out, for metrics.
+    fn publish_announce(
+        &self,
+        reason: AnnounceReason,
+        announce: Announce,
+    ) -> impl Future<Output = ()> + Send {
         let _ = reason;
+        self.publish(ReplicaMessage::Announce(announce))
+    }
+
+    /// Publishes a probe; `reason` is why it went out, for metrics.
+    fn publish_probe(&self, reason: ProbeReason, probe: Probe) -> impl Future<Output = ()> + Send {
+        let _ = reason;
+        self.publish(ReplicaMessage::Probe(probe))
+    }
+}
+
+/// Why a probe went out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeReason {
+    /// Starting up: whoever holds the scope, speak now.
+    Solicit,
+    /// A peer's announce diverged from ours in a way only a full announce
+    /// resolves.
+    Repair,
+    /// A gossip-only offloader asking for the full announces that retire it.
+    Gossip,
+}
+
+impl ProbeReason {
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Solicit => "solicit",
+            Self::Repair => "repair",
+            Self::Gossip => "gossip",
+        }
     }
 }
 
@@ -317,7 +351,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                 let scopes = self.send_announce(&[], false, reason).await?;
                 if !scopes.is_empty() {
                     self.transport
-                        .publish(ReplicaMessage::Probe(Probe { filter: scopes }))
+                        .publish_probe(ProbeReason::Gossip, Probe { filter: scopes })
                         .await;
                 }
                 Ok(())
@@ -479,12 +513,14 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             known.insert(scope.clone(), sa);
         }
 
-        self.transport.announcing(reason);
         self.transport
-            .publish(ReplicaMessage::Announce(Announce {
-                known,
-                full_replica: matches!(self.mode, ReplicaMode::Full),
-            }))
+            .publish_announce(
+                reason,
+                Announce {
+                    known,
+                    full_replica: matches!(self.mode, ReplicaMode::Full),
+                },
+            )
             .await;
 
         Ok(scopes)
@@ -498,11 +534,11 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
     /// refusing routed writes) after absorbing at most the write that minted
     /// it.
     pub async fn solicit(&self, scope: &api::Scope) {
-        self.probe_scope(scope).await;
+        self.probe_scope(scope, ProbeReason::Solicit).await;
     }
 
     /// Probes `scope` for a full announce, unless one was requested recently.
-    async fn probe_scope(&self, scope: &api::Scope) {
+    async fn probe_scope(&self, scope: &api::Scope, reason: ProbeReason) {
         let now = Instant::now();
         let fire = match self.probes.entry(scope.clone()) {
             dashmap::Entry::Occupied(mut entry) => {
@@ -520,9 +556,12 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
 
         if fire {
             self.transport
-                .publish(ReplicaMessage::Probe(Probe {
-                    filter: vec![scope.clone()],
-                }))
+                .publish_probe(
+                    reason,
+                    Probe {
+                        filter: vec![scope.clone()],
+                    },
+                )
                 .await;
         }
     }
@@ -575,7 +614,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                             scope,
                             sender,
                         );
-                        self.probe_scope(scope).await;
+                        self.probe_scope(scope, ProbeReason::Repair).await;
                     }
                 }
                 CatchupPlan::Behind {

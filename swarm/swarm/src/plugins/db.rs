@@ -407,9 +407,9 @@ impl StoreContext {
                         let repl = repl.clone();
                         let handle = handle;
 
-                        move |sender, msg| {
+                        move |sender, msg, bytes| {
                             let kind = msg.name();
-                            metrics::record_msg_recv(kind);
+                            metrics::record_msg_recv(kind, bytes);
 
                             // Taken before the spawn, so the gap to the task
                             // actually running is measured rather than assumed.
@@ -518,6 +518,9 @@ impl StoreContext {
                                 .expect("unable to serialise sync response");
                             let encoded = scan_started.elapsed().saturating_sub(scanned);
                             let len = bytes.len();
+                            if let Some(scope) = &pulled {
+                                metrics::record_pull_served_bytes(&scope.namespace, len);
+                            }
                             if let Err(err) = query.reply(query.key_expr().clone(), bytes).await {
                                 tracing::warn!("unable to reply to a sync request: {}", err);
                             }
@@ -685,9 +688,9 @@ impl StoreContext {
                         let repl = repl.clone();
                         let handle = handle;
 
-                        move |sender, msg| {
+                        move |sender, msg, bytes| {
                             let kind = msg.name();
-                            metrics::record_msg_recv(kind);
+                            metrics::record_msg_recv(kind, bytes);
 
                             // Taken before the spawn, so the gap to the task
                             // actually running is measured rather than assumed.
