@@ -831,7 +831,7 @@ async fn drive_offload(
     repl.solicit(&scope).await;
 
     let interval = Duration::from_secs(2);
-    let jitter_range = 100..2000u64;
+    let jitter = || Duration::from_millis(rand::random_range(100..2000u64));
     let mut escalate_at = match kind {
         OffloadKind::Hidden | OffloadKind::Dropped | OffloadKind::Sink => {
             Some(tokio::time::Instant::now() + context.escalation_timeout)
@@ -852,7 +852,10 @@ async fn drive_offload(
     let mut covered = Vec::new();
 
     let mut verify_at = tokio::time::Instant::now() + VERIFY_EVERY;
-    let mut reason = AnnounceReason::Tick;
+    // `None` when the wake has nothing new to announce. The tick is a fixed
+    // deadline only an announce moves, so wakes that skip one never starve it.
+    let mut reason = Some(AnnounceReason::Tick);
+    let mut tick_at = tokio::time::Instant::now();
 
     loop {
         // A replicator for the scope announces and serves strictly more than
@@ -862,34 +865,31 @@ async fn drive_offload(
             break;
         }
 
-        tracing::trace!("[{}] announcing offload of {}", me, scope);
+        if let Some(reason) = reason {
+            tracing::trace!("[{}] announcing offload of {}", me, scope);
 
-        if let Err(err) = repl.announce_for(reason).await {
-            tracing::warn!("unable to announce offload: {}", err);
+            if let Err(err) = repl.announce_for(reason).await {
+                tracing::warn!("unable to announce offload: {}", err);
+            }
+
+            tick_at = tokio::time::Instant::now() + interval + jitter();
         }
 
         if tokio::time::Instant::now() >= verify_at {
             verify_at = tokio::time::Instant::now() + VERIFY_EVERY;
 
-            // Taken before the ask, so the answer can only be about more than
-            // this and never less — a row that lands while the peer is
-            // answering is not something it just vouched for.
-            let held = held_sync_points(&context, &scope).await;
-
-            if verify_covered(&context, &repl, &scope).await {
-                // A verified retirement, same as the announce-based path: the
-                // custody row this drain recorded is over. confirm_shutdown
-                // drives the loop's exit through the stopped() arm below.
+            // A verified retirement, same as the announce-based path: the
+            // custody row this drain recorded is over. confirm_shutdown
+            // drives the loop's exit through the stopped() arm below.
+            if let Some(held) = verified_holdings(&context, &repl, &scope).await {
                 retired = true;
                 covered = held;
                 repl.confirm_shutdown();
             }
         }
 
-        let ms = rand::random_range(jitter_range.clone());
-
         reason = tokio::select! {
-            () = tokio::time::sleep(interval + Duration::from_millis(ms)) => AnnounceReason::Tick,
+            () = tokio::time::sleep_until(tick_at) => Some(AnnounceReason::Tick),
             () = repl.stopped() => {
                 retired = true;
                 break;
@@ -922,25 +922,26 @@ async fn drive_offload(
             // tick of this loop, not any transfer cost.
             () = signals.nudge.notified() => {
                 tokio::time::sleep(NUDGE_DEBOUNCE).await;
-                AnnounceReason::Commit
+                Some(AnnounceReason::Commit)
             }
             () = signals.rearm.notified() => {
                 if escalate_at.is_none() {
                     tracing::info!("[{}] re-arming escalation for the drain of {}", me, scope);
                     escalate_at = Some(tokio::time::Instant::now() + context.escalation_timeout);
                 }
-                AnnounceReason::Wake
+                Some(AnnounceReason::Wake)
             }
             () = signals.findable.notified(), if queryable.is_none() => {
                 queryable = Some(declare_drain_locate(&context, &scope).await);
-                AnnounceReason::Wake
+                Some(AnnounceReason::Wake)
             }
             // Escalation is for data no replica is coming for; one pulling
             // it is coming. Only an armed deadline moves: an unarmed one is
-            // an unwinding drain's, and stays unarmed.
+            // an unwinding drain's, and stays unarmed. The puller already
+            // knows what we hold, so there is nothing to announce.
             () = signals.fetched.notified(), if escalate_at.is_some() => {
                 escalate_at = Some(tokio::time::Instant::now() + context.escalation_timeout);
-                AnnounceReason::Wake
+                None
             }
         };
     }
@@ -1085,6 +1086,20 @@ async fn release_offloaded(
         Ok(Err(err)) => tracing::error!("unable to release the offloaded data of {scope}: {err}"),
         Err(err) => tracing::error!("release task for {scope} failed: {err}"),
     }
+}
+
+/// What this drain holds of `scope`, if a live replica confirms covering it.
+///
+/// Taken before the ask, so the answer can only be about more than this and
+/// never less — a row that lands while the peer is answering is not something
+/// it just vouched for.
+async fn verified_holdings(
+    context: &StoreContext,
+    repl: &db::replication::Replicator<replication::ZenohTransport, TxEvents>,
+    scope: &models::Scope,
+) -> Option<Vec<models::SyncPointId>> {
+    let held = held_sync_points(context, scope).await;
+    verify_covered(context, repl, scope).await.then_some(held)
 }
 
 /// Whether any live replica in the peer view confirms full coverage of `scope`.
