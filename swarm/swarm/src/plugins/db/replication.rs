@@ -53,6 +53,10 @@ impl db::replication::ReplicaTransport for ZenohTransport {
         self.client.publish(msg).await;
     }
 
+    fn announcing(&self, reason: db::replication::AnnounceReason) {
+        super::metrics::record_announce_reason(self.role, reason.name());
+    }
+
     fn can_sync(&self) -> bool {
         true
     }

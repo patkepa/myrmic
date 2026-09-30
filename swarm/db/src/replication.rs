@@ -85,6 +85,39 @@ pub trait ReplicaTransport: Clone + Send + Sync + 'static {
             None
         }
     }
+
+    /// An announce is about to be published, and why; for metrics.
+    fn announcing(&self, reason: AnnounceReason) {
+        let _ = reason;
+    }
+}
+
+/// Why an announce went out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnounceReason {
+    /// The announce loop's periodic tick.
+    Tick,
+    /// A commit woke the announce loop.
+    Commit,
+    /// A peer's probe asked for it.
+    Probe,
+    /// A pull from a drain finished.
+    Pull,
+    /// The announce loop woke for anything else.
+    Wake,
+}
+
+impl AnnounceReason {
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Tick => "tick",
+            Self::Commit => "commit",
+            Self::Probe => "probe",
+            Self::Pull => "pull",
+            Self::Wake => "wake",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -262,21 +295,26 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
 
     /// This tells the replica to generate an Announce message, and send it through the transport.
     pub async fn announce(&self) -> anyhow::Result<()> {
+        self.announce_for(AnnounceReason::Tick).await
+    }
+
+    /// [`Self::announce`], saying why.
+    pub async fn announce_for(&self, reason: AnnounceReason) -> anyhow::Result<()> {
         match self.mode {
-            ReplicaMode::Full => self.send_announce(&[], true).await.map(drop),
+            ReplicaMode::Full => self.send_announce(&[], true, reason).await.map(drop),
             // With a sync-capable transport, replicas pull a drain's holdings
             // directly and coverage is verified point-to-point, so a floored
             // heartbeat is all the mesh needs — re-broadcasting a frozen
             // frontier in full every round is pure waste.
             ReplicaMode::Offload if self.transport.can_sync() => {
-                self.send_announce(&[], true).await.map(drop)
+                self.send_announce(&[], true, reason).await.map(drop)
             }
             // Gossip-only: an offloader holds a stray subset, so a baseline
             // fingerprint would never match a replica's; it announces
             // explicitly, and the probe solicits the full announces its
             // announce-based coverage check needs.
             ReplicaMode::Offload => {
-                let scopes = self.send_announce(&[], false).await?;
+                let scopes = self.send_announce(&[], false, reason).await?;
                 if !scopes.is_empty() {
                     self.transport
                         .publish(ReplicaMessage::Probe(Probe { filter: scopes }))
@@ -318,7 +356,9 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
     /// A probe answers with a full announce: it is the repair path for peers
     /// that cannot verify a floored announce's elided prefix.
     async fn handle_probe(&self, probe: Probe) -> anyhow::Result<()> {
-        self.send_announce(&probe.filter, false).await.map(drop)
+        self.send_announce(&probe.filter, false, AnnounceReason::Probe)
+            .await
+            .map(drop)
     }
 
     /// The heads this node holds for its subject.
@@ -388,6 +428,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         &self,
         filter: &[api::Scope],
         floored: bool,
+        reason: AnnounceReason,
     ) -> anyhow::Result<Vec<api::Scope>> {
         let me = self.store.node_id();
 
@@ -438,6 +479,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             known.insert(scope.clone(), sa);
         }
 
+        self.transport.announcing(reason);
         self.transport
             .publish(ReplicaMessage::Announce(Announce {
                 known,
@@ -749,7 +791,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             return true;
         }
         if let Err(err) = self
-            .send_announce(std::slice::from_ref(scope), floored)
+            .send_announce(std::slice::from_ref(scope), floored, AnnounceReason::Pull)
             .await
         {
             tracing::warn!(

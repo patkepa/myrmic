@@ -29,6 +29,7 @@ struct ReplicationMetrics {
     announce_heads: Counter<u64>,
     announce_baselines: Counter<u64>,
     announce_scopes: Counter<u64>,
+    announce_reasons: Counter<u64>,
     handle_queue_nanos: Counter<u64>,
     handle_nanos: Counter<u64>,
     handled: Counter<u64>,
@@ -55,6 +56,7 @@ static METRICS: LazyLock<ReplicationMetrics> = LazyLock::new(|| {
         announce_heads: meter.u64_counter("repl_announce_heads").build(),
         announce_baselines: meter.u64_counter("repl_announce_baselines").build(),
         announce_scopes: meter.u64_counter("repl_announce_scopes").build(),
+        announce_reasons: meter.u64_counter("repl_announce_reasons").build(),
         handle_queue_nanos: meter.u64_counter("repl_handle_queue_nanos").build(),
         handle_nanos: meter.u64_counter("repl_handle_nanos").build(),
         handled: meter.u64_counter("repl_handled").build(),
@@ -114,6 +116,19 @@ pub(crate) fn record_announce(scopes: usize, heads: usize, baselines: usize) {
     METRICS.announce_scopes.add(scopes as u64, &attrs);
     METRICS.announce_heads.add(heads as u64, &attrs);
     METRICS.announce_baselines.add(baselines as u64, &attrs);
+}
+
+/// One announce published, by what sent it (`role`, as for [`record_pull`])
+/// and why — a periodic tick, a commit, a peer's probe, or a finished pull.
+pub(crate) fn record_announce_reason(role: &'static str, reason: &'static str) {
+    METRICS.announce_reasons.add(
+        1,
+        &[
+            KeyValue::new("role", role),
+            KeyValue::new("reason", reason),
+            pid(),
+        ],
+    );
 }
 
 /// One received message's handling, split at the point that matters: `queued` is

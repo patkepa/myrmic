@@ -8,6 +8,7 @@ use zenoh::{Result as ZResult, Session};
 use config::{Config, StoreConfig};
 
 use crate::plugins::MyrmicCtx;
+use db::replication::AnnounceReason;
 use db::store::TransactionOptions;
 use db::store::fjall::RemoteTx;
 use db_commons::models;
@@ -741,10 +742,11 @@ impl StoreContext {
                     None => std::future::pending().await,
                 };
 
+                let mut reason = AnnounceReason::Tick;
                 loop {
                     tracing::trace!("[{}] Sending announcement", me);
 
-                    if let Err(err) = repl.announce().await {
+                    if let Err(err) = repl.announce_for(reason).await {
                         tracing::warn!("unable to announce self to network: {}", err);
                     }
 
@@ -758,14 +760,17 @@ impl StoreContext {
 
                     tracing::trace!("[{}] sleeping for {}s", me, sleep_time.as_secs_f32());
 
-                    tokio::select! {
-                        () = tokio::time::sleep(sleep_time) => (),
+                    reason = tokio::select! {
+                        () = tokio::time::sleep(sleep_time) => AnnounceReason::Tick,
                         () = repl.stopped() => break,
                         // A commit landed: announce it now. Commits arriving
                         // within the debounce ride the same announce, so write
                         // traffic never becomes announce traffic one for one.
-                        () = nudged(&nudge) => tokio::time::sleep(NUDGE_DEBOUNCE).await,
-                    }
+                        () = nudged(&nudge) => {
+                            tokio::time::sleep(NUDGE_DEBOUNCE).await;
+                            AnnounceReason::Commit
+                        }
+                    };
                 }
 
                 // Only this replicator's own entry: a successor for the same
@@ -847,6 +852,7 @@ async fn drive_offload(
     let mut covered = Vec::new();
 
     let mut verify_at = tokio::time::Instant::now() + VERIFY_EVERY;
+    let mut reason = AnnounceReason::Tick;
 
     loop {
         // A replicator for the scope announces and serves strictly more than
@@ -858,7 +864,7 @@ async fn drive_offload(
 
         tracing::trace!("[{}] announcing offload of {}", me, scope);
 
-        if let Err(err) = repl.announce().await {
+        if let Err(err) = repl.announce_for(reason).await {
             tracing::warn!("unable to announce offload: {}", err);
         }
 
@@ -882,8 +888,8 @@ async fn drive_offload(
 
         let ms = rand::random_range(jitter_range.clone());
 
-        tokio::select! {
-            () = tokio::time::sleep(interval + Duration::from_millis(ms)) => (),
+        reason = tokio::select! {
+            () = tokio::time::sleep(interval + Duration::from_millis(ms)) => AnnounceReason::Tick,
             () = repl.stopped() => {
                 retired = true;
                 break;
@@ -916,23 +922,27 @@ async fn drive_offload(
             // tick of this loop, not any transfer cost.
             () = signals.nudge.notified() => {
                 tokio::time::sleep(NUDGE_DEBOUNCE).await;
+                AnnounceReason::Commit
             }
             () = signals.rearm.notified() => {
                 if escalate_at.is_none() {
                     tracing::info!("[{}] re-arming escalation for the drain of {}", me, scope);
                     escalate_at = Some(tokio::time::Instant::now() + context.escalation_timeout);
                 }
+                AnnounceReason::Wake
             }
             () = signals.findable.notified(), if queryable.is_none() => {
                 queryable = Some(declare_drain_locate(&context, &scope).await);
+                AnnounceReason::Wake
             }
             // Escalation is for data no replica is coming for; one pulling
             // it is coming. Only an armed deadline moves: an unarmed one is
             // an unwinding drain's, and stays unarmed.
             () = signals.fetched.notified(), if escalate_at.is_some() => {
                 escalate_at = Some(tokio::time::Instant::now() + context.escalation_timeout);
+                AnnounceReason::Wake
             }
-        }
+        };
     }
 
     forget_drain_signals(&context, &scope, &signals);
