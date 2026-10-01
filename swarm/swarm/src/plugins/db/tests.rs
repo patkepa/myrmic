@@ -636,6 +636,43 @@ async fn a_routed_read_fallback_leaves_no_trace() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_rolled_back_routed_write_leaves_no_trace() {
+    let (session, _drop_tx) = start_node_with_escalation(Duration::from_millis(300)).await;
+    let client = Client::new(&session);
+
+    client
+        .send(models::tx_apply::Request {
+            target: models::tx_apply::Target::New {
+                constraint: models::tx_begin::Constraint::Routed(scope()),
+                access: models::tx_begin::Access::Write,
+                retention_period: None,
+            },
+            ops: vec![append(b"1", b"a")],
+            finish: models::tx_apply::Finish::Rollback,
+        })
+        .await
+        .expect("send failed")
+        .expect("apply failed");
+
+    // Past the escalation window: nothing landed, so nothing is held.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let replica = db_client::replica_v1::Client::new(&session, Subject::Scope(scope()))
+        .expect("unable to create replica client");
+    let holders = replica.locate(&scope(), None).await.expect("locate failed");
+    assert!(
+        holders.is_empty(),
+        "a rolled-back write must not make the scope locatable",
+    );
+
+    let key = custody_key(&session, &scope());
+    assert!(
+        read_custody_row(&client, &key).await.is_none(),
+        "a rolled-back write must not escalate into custody",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_commit_to_an_unreplicated_scope_starts_offloading() {
     let (session, _drop_tx) = start_node().await;
     let client = Client::new(&session);

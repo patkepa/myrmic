@@ -39,7 +39,7 @@ pub(crate) fn candidates(responses: impl IntoIterator<Item = Response>) -> Vec<P
 /// `min_version` is set) holds the scope at at least that version. Among those,
 /// the most caught-up wins, and equal heads are broken by `scope`'s rendezvous
 /// draw. `prefer_full` (writes) ranks non-draining holders first, before head —
-/// see [`HolderState`](db_commons::models::locate::HolderState) for why the two
+/// see [`HolderState`] for why the two
 /// access kinds rank differently. `None` means nothing qualified, so the caller
 /// must fall back.
 ///

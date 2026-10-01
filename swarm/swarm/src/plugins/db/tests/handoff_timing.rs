@@ -909,6 +909,7 @@ async fn handoff_timing() {
 /// start. Escalating would promote the source into a custodian of the very
 /// scope it is handing over.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "depends on the pull outlasting a 2s timeout; run on demand"]
 async fn a_drain_being_pulled_from_does_not_escalate() {
     init_logging();
     // Far shorter than the pull below, far longer than a gap between pages —

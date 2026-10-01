@@ -227,8 +227,8 @@ struct DrainSignals {
     /// What it drains is a full copy after all (see [`OffloadKind::Dropped`]):
     /// become findable.
     findable: Notify,
-    /// A replica just fetched from it: the data is on its way to a durable
-    /// home, so an armed escalation deadline starts over.
+    /// A replica applied a page it fetched from it: the data is on its way to
+    /// a durable home, so an armed escalation deadline starts over.
     fetched: Notify,
 }
 
@@ -362,8 +362,8 @@ impl StoreContext {
         self.signal_offload(scope, |drain| &drain.findable);
     }
 
-    /// Tells the running drain of `scope`, if any, that a replica fetched
-    /// from it.
+    /// Tells the running drain of `scope`, if any, that a replica applied a
+    /// page it fetched from it.
     fn note_offload_fetch(&self, scope: &models::Scope) {
         self.signal_offload(scope, |drain| &drain.fetched);
     }
@@ -476,6 +476,11 @@ impl StoreContext {
                         sync::Request::Pull(req) => Some(req.scope.clone()),
                         sync::Request::Verify(_) => None,
                     };
+                    // A puller asks for the next page only once it applied the
+                    // last; a first page proves nothing, as a puller whose
+                    // applies keep failing asks for it again and again.
+                    let progressed =
+                        matches!(&req, sync::Request::Pull(req) if req.after.is_some());
 
                     // Store scans, off the async workers: a busy sync
                     // queryable must not starve the locate/tx queryables
@@ -510,7 +515,9 @@ impl StoreContext {
                                 );
                                 // A replica is taking the scope off this node:
                                 // a drain of it is not stranded.
-                                context.note_offload_fetch(scope);
+                                if progressed {
+                                    context.note_offload_fetch(scope);
+                                }
                             }
 
                             let scanned = scan_started.elapsed();

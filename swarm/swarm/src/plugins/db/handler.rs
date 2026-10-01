@@ -274,8 +274,10 @@ impl StoreContext {
         // A fallback landing while a drain is already running is the re-arm
         // signal: the client just proved it searched and found nobody better,
         // so an unwinding drain's deference target is evidently unreachable.
+        // A write rolled back here lands nothing either.
         if let tx_begin::Constraint::Routed(scope) = &constraint
             && matches!(access, tx_begin::Access::Write)
+            && !matches!(finish, tx_apply::Finish::Rollback)
             && let Err(message) = self.place_routed_write(scope)
         {
             return Err(Some(tx_apply::Error {
