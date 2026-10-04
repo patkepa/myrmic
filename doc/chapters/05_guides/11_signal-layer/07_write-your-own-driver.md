@@ -165,6 +165,15 @@ One field is deliberately missing. `sample_interval_ms` is consumed by the gener
 loop itself, which ticks at that rate; it is never handed to the driver, so it gets no struct
 field. Every other `config_schema` entry needs one.
 
+### Qualified payload types
+
+Signal `type` fields accept Rust paths such as `my_driver::Reading`, without a
+local import alias in the generated module. Use the same spelling on connected
+ports and add the referenced crate to the host's dependencies. Built-in names
+are unchanged. Paths cannot contain generic arguments; malformed paths return a
+code-generation error. A Rust path does not change the type's `WireType` identity
+or serialization. Configuration `rust_type` fields keep their existing syntax.
+
 ## Actuator drivers: consuming outlet values
 
 An actuator driver is the mirror image, and the differences are not arbitrary.

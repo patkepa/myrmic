@@ -49,7 +49,7 @@ fn generate_tokens(
 
     ts.extend(imports::emit_common_imports(backend));
     ts.extend(taps::emit_tap_statics(pipeline)?);
-    ts.extend(outlets::emit_outlet_statics(pipeline));
+    ts.extend(outlets::emit_outlet_statics(pipeline)?);
     ts.extend(backend.emit_board_peripherals(manifest, driver_schemas));
     ts.extend(buses::emit_bus_statics(pipeline, manifest, backend)?);
 

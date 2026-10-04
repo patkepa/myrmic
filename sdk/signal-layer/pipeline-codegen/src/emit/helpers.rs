@@ -38,8 +38,8 @@ pub(crate) fn outlet_static_ident(name: &str) -> Ident {
     Ident::new(&format!("OUTLET_{upper}"), Span::call_site())
 }
 
-pub(crate) fn rust_type_tokens(type_name: &str) -> TokenStream {
-    match type_name {
+pub(crate) fn rust_type_tokens(type_name: &str) -> anyhow::Result<TokenStream> {
+    let tokens = match type_name {
         "f32" => quote!(f32),
         "f64" => quote!(f64),
         "u8" => quote!(u8),
@@ -57,10 +57,19 @@ pub(crate) fn rust_type_tokens(type_name: &str) -> TokenStream {
         "PwmDuty" => quote!(signal_layer_types::PwmDuty),
         "OutletFault" => quote!(signal_layer_types::OutletFault),
         other => {
-            let ident = Ident::new(other, Span::call_site());
-            quote!(#ident)
+            let path: syn::Path = syn::parse_str(other)
+                .map_err(|error| anyhow::anyhow!("invalid signal type `{other}`: {error}"))?;
+            if path
+                .segments
+                .iter()
+                .any(|s| !matches!(s.arguments, syn::PathArguments::None))
+            {
+                anyhow::bail!("signal type `{other}` must be a path without generic arguments");
+            }
+            quote!(#path)
         }
-    }
+    };
+    Ok(tokens)
 }
 
 /// Resolve the source id that ultimately feeds `input` — a `"src.field"`
