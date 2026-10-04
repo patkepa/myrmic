@@ -144,6 +144,22 @@ pub fn validate_pipeline_against_manifest(
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
+    for (id, schema) in driver_schemas {
+        for name in schema.requires.pin_modes.keys() {
+            if schema.writes.is_some()
+                || name == "cs"
+                || !schema.requires.optional_pins.contains(name)
+            {
+                errors.push(ValidationError::new(format!(
+                    "driver `{id}`: pin_modes must name an optional sensor pin, got `{name}`"
+                )));
+            }
+            if let Err(error) = validate_rust_ident(name) {
+                errors.push(ValidationError::new(format!("driver `{id}` pin: {error}")));
+            }
+        }
+    }
+
     // Build device lookup: id → DeviceEntry
     let device_map: IndexMap<&str, &crate::manifest::DeviceEntry> = manifest
         .devices
@@ -982,6 +998,7 @@ devices:
                     .map(|transport| vec![RequiredBus { transport }])
                     .unwrap_or_default(),
                 optional_pins: vec![],
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -1119,6 +1136,7 @@ devices:
             requires: Requires {
                 buses: vec![],
                 optional_pins: pins.iter().map(std::string::ToString::to_string).collect(),
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -2402,6 +2420,7 @@ devices:
             requires: Requires {
                 buses: vec![],
                 optional_pins: vec!["out".into(), "feedback".into()],
+                ..Default::default()
             },
             ..Default::default()
         }

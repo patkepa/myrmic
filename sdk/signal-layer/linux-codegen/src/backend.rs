@@ -9,7 +9,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
 use pipeline_backend_api::ChipBackend;
-use pipeline_backend_api::descriptor::{DriverSchema, OutputMode};
+use pipeline_backend_api::descriptor::{DriverSchema, OutputMode, PinMode};
 use pipeline_backend_api::manifest::{BoardManifest, BusTransport};
 use pipeline_backend_api::scaffold;
 use pipeline_backend_api::validate_types::ValidationError;
@@ -138,6 +138,41 @@ impl ChipBackend for LinuxChipBackend {
                     .expect(#expect_msg);
             });
             field_inits.push(quote! { #cs_field, });
+        }
+
+        for device in &manifest.devices {
+            let Some(schema) = driver_schemas.get(&device.driver) else {
+                continue;
+            };
+            if schema.writes.is_some() {
+                continue;
+            }
+            for (name, &mode) in &schema.requires.pin_modes {
+                let Some(&line) = device.pins.get(name) else {
+                    continue;
+                };
+                let line = u32::from(line);
+                let chip = self.overlay.as_ref().map_or(DEFAULT_GPIO_CHIP, |ov| {
+                    ov.device(&device.id)
+                        .and_then(|d| d.gpio_chip.as_deref())
+                        .unwrap_or(DEFAULT_GPIO_CHIP)
+                });
+                let field = snake_ident(&format!("{}_{name}", device.id));
+                let ty = match mode {
+                    PinMode::Input => self.gpio_input_type(),
+                    PinMode::Output { .. } => self.gpio_output_type(),
+                };
+                let open = match mode {
+                    PinMode::Input => quote! { linux_gpio_shim::LinuxInputPin::open(#chip, #line) },
+                    PinMode::Output { initial_high } => {
+                        quote! { linux_gpio_shim::LinuxOutputPin::open(#chip, #line, #initial_high) }
+                    }
+                };
+                let message = format!("open {chip} line {line} ({}.{name})", device.id);
+                field_decls.push(quote! { pub #field: #ty, });
+                inits.push(quote! { let #field = #open.expect(#message); });
+                field_inits.push(quote! { #field, });
+            }
         }
 
         // Output devices (outlets): the driven pin as a GPIO line or a sysfs
@@ -269,6 +304,16 @@ impl ChipBackend for LinuxChipBackend {
 
     fn spi_cs_type(&self) -> TokenStream {
         quote! { linux_gpio_shim::LinuxOutputPin }
+    }
+
+    fn sensor_pin_type(&self, mode: Option<PinMode>) -> anyhow::Result<TokenStream> {
+        match mode {
+            Some(PinMode::Input) => Ok(self.gpio_input_type()),
+            Some(PinMode::Output { .. }) => Ok(self.gpio_output_type()),
+            None => anyhow::bail!(
+                "Linux sensor pins need a direction in requires.pin_modes; flexible GPIO is unsupported"
+            ),
+        }
     }
 
     fn gpio_flex_type(&self) -> TokenStream {

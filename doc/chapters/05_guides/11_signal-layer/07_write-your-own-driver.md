@@ -332,3 +332,21 @@ a pipeline can point at it.
 
 From there, the [board file](./01_describe-your-hardware.md) decides where the device is wired
 and the [pipeline](./02_design-your-pipeline.md) decides what happens to its values.
+
+### Sensor GPIO direction
+
+Use `pin_modes` to specify the direction of a sensor's optional pins:
+
+```yaml
+requires:
+  optional_pins: [reset, ready]
+  pin_modes:
+    reset: { direction: output, initial_high: true }
+    ready: { direction: input }
+```
+
+Wiring stays in the board's `pins` map. Linux uses the device's `gpio_chip`;
+outputs start at the declared level. The existing `new_with_pins` constructor
+receives owned input/output handles, retained across initialization retries.
+Unwired pins are typed `None`. On Linux, every constructor pin needs a mode;
+ESP also supports its existing flexible pins when no mode is specified.

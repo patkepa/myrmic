@@ -102,9 +102,7 @@ pub(crate) fn emit_source_task(
     let interval_expr = backend.emit_interval(interval_ms);
     let now_millis_expr = backend.emit_now_millis();
 
-    // Optional pins: all declared by the driver descriptor, plus which ones the
-    // manifest wired up. The task function takes one Flex param per wired pin;
-    // the `<Driver>Pins` struct contains every declared pin as `Option<Flex>`.
+    // The driver owns its wired GPIOs across initialization retries.
     let optional_pin_names: Vec<&str> = driver_schema
         .requires
         .optional_pins
@@ -120,14 +118,17 @@ pub(crate) fn emit_source_task(
     let mut extra_task_params = TokenStream::new();
     for pin_name in &wired_pin_names {
         let pin_ident = snake_ident(pin_name);
-        let flex_ty = backend.gpio_flex_type();
+        let flex_ty =
+            backend.sensor_pin_type(driver_schema.requires.pin_modes.get(*pin_name).copied())?;
         extra_task_params.extend(quote! { #pin_ident: #flex_ty, });
     }
 
     // Infallible construction (no bus access). The fallible bring-up happens
     // via `driver.init(&mut bus)` inside the task loop, so a sensor that is
     // absent or failing at boot can be retried instead of killing the task.
-    let construct_expr = if wired_pin_names.is_empty() {
+    let construct_expr = if wired_pin_names.is_empty()
+        && driver_schema.requires.pin_modes.is_empty()
+    {
         quote! { #drv_crate::#drv_type::new(&cfg) }
     } else {
         let pins_type = Ident::new(
@@ -140,7 +141,9 @@ pub(crate) fn emit_source_task(
             if wired_pin_names.contains(pin_name) {
                 pin_fields.extend(quote! { #field_ident: Some(#field_ident), });
             } else {
-                pin_fields.extend(quote! { #field_ident: None, });
+                let ty = backend
+                    .sensor_pin_type(driver_schema.requires.pin_modes.get(*pin_name).copied())?;
+                pin_fields.extend(quote! { #field_ident: None::<#ty>, });
             }
         }
         quote! {
