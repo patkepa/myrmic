@@ -22,7 +22,7 @@ pub(crate) fn emit_tap_statics(pipeline: &PipelineFile) -> Result<TokenStream> {
 
     for tap in &pipeline.taps {
         let static_name = tap_static_ident(&tap.name);
-        let ty = rust_type_tokens(&tap.type_name);
+        let ty = rust_type_tokens(&tap.type_name)?;
         let decl = match tap.kind {
             TapKind::Retained => {
                 let kind = stream_kind_tokens(&tap.stream_kind);

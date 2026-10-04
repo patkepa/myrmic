@@ -11,19 +11,19 @@ use super::helpers::{outlet_static_ident, rust_type_tokens};
 
 /// Emit one `RetainedSlot` static per outlet. Outlets are retained-only for v1
 /// (a command is last-value-wins), so no kind/stream selection is needed.
-pub(crate) fn emit_outlet_statics(pipeline: &PipelineFile) -> TokenStream {
+pub(crate) fn emit_outlet_statics(pipeline: &PipelineFile) -> anyhow::Result<TokenStream> {
     let mut ts = TokenStream::new();
     // Only cell-driven outlets get a slot + registry entry. Pipeline-driven
     // (feed-forward) outlets are applied inline in the source task and are never
     // exposed to WASM cells.
     for outlet in pipeline.outlets.iter().filter(|o| o.input.is_none()) {
         let static_name = outlet_static_ident(&outlet.name);
-        let ty = rust_type_tokens(&outlet.type_name);
+        let ty = rust_type_tokens(&outlet.type_name)?;
         ts.extend(quote! {
             pub static #static_name: RetainedSlot<#ty> = RetainedSlot::new();
         });
     }
-    ts
+    Ok(ts)
 }
 
 /// Emit `register_outlets(&mut OutletRegistry)`, inserting every generated
