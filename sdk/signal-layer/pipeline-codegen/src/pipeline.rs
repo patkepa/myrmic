@@ -91,3 +91,14 @@ pub enum TapStreamKind {
     #[default]
     Metric,
 }
+
+/// Rust symbol suffix for a public signal name. Registration uses the original name.
+pub(crate) fn signal_symbol(name: &str) -> String {
+    name.to_uppercase().replace(['-', '.'], "_")
+}
+
+/// Resolve a field reference without confusing an outlet namespace for the field.
+pub(crate) fn producer_field<'a>(reference: &'a str, owner: &str) -> Option<&'a str> {
+    let (producer, field) = reference.rsplit_once('.')?;
+    (producer == owner).then_some(field)
+}

@@ -9,7 +9,7 @@ use quote::quote;
 use crate::ChipBackend;
 use crate::descriptor::{DriverSchema, OutputMode, Scope};
 use crate::manifest::DeviceEntry;
-use crate::pipeline::{Outlet, PipelineFile};
+use crate::pipeline::{Outlet, PipelineFile, producer_field};
 
 use super::helpers::{
     config_value_tokens, outlet_static_ident, pascal_case, snake_ident, tap_static_ident,
@@ -119,10 +119,9 @@ pub(crate) fn emit_sink_task(
     // Feedback taps for this outlet (#1018): status Retained taps
     // (`<outlet>.<field>`) written from a real read-back, and the reserved
     // `<outlet>.error` Event tap.
-    let outlet_prefix = format!("{}.", outlet.name);
     let mut status_updates = TokenStream::new();
     for tap in &pipeline.taps {
-        if let Some(field) = tap.source.strip_prefix(&outlet_prefix) {
+        if let Some(field) = producer_field(&tap.source, &outlet.name) {
             if field == OUTLET_ERROR_FIELD {
                 continue;
             }

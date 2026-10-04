@@ -8,7 +8,7 @@ use quote::quote;
 use crate::ChipBackend;
 use crate::descriptor::{DriverSchema, OutputMode, Scope};
 use crate::manifest::{BoardManifest, BusConfig, BusTransport, DeviceEntry};
-use crate::pipeline::{PipelineFile, Source, TapKind};
+use crate::pipeline::{PipelineFile, Source, TapKind, producer_field};
 
 use super::helpers::{
     config_value_tokens, owned_outlets_for_source, pascal_case, snake_ident, tap_static_ident,
@@ -157,11 +157,10 @@ pub(crate) fn emit_source_task(
     // task writes (direct + step-derived, below). When the source leaves the
     // healthy state its retained taps are cleared so consumers read no value
     // rather than a stale one produced before the fault.
-    let source_prefix = format!("{}.", source.id);
     let mut tap_writes = TokenStream::new();
     let mut retained_clears = TokenStream::new();
     for tap in &pipeline.taps {
-        if let Some(field_name) = tap.source.strip_prefix(&source_prefix) {
+        if let Some(field_name) = producer_field(&tap.source, &source.id) {
             let static_name = tap_static_ident(&tap.name);
             let field_ident = snake_ident(field_name);
             match tap.kind {
@@ -315,7 +314,7 @@ pub(crate) fn emit_source_task(
 
         for step in remaining {
             // Resolve the input expression: source field or a previous step's output var.
-            let input_ts = if let Some(field) = step.input.strip_prefix(&source_prefix) {
+            let input_ts = if let Some(field) = producer_field(&step.input, &source.id) {
                 let f = snake_ident(field);
                 Some(quote! { readings.#f })
             } else if let Some(out_var) = step_out_vars.get(step.input.as_str()) {
@@ -325,7 +324,7 @@ pub(crate) fn emit_source_task(
                 continue;
             };
             let input_ts = input_ts.unwrap();
-            let is_source_input = step.input.starts_with(&source_prefix);
+            let is_source_input = producer_field(&step.input, &source.id).is_some();
 
             let step_crate = snake_ident(&step.op);
             let step_state_type = Ident::new(
@@ -434,7 +433,7 @@ pub(crate) fn emit_source_task(
     // Feed-forward applies, emitted after the DSP walk so step output vars exist.
     for (driver_var, input) in &outlet_applies {
         let driver_name = driver_var.to_string();
-        if let Some(field) = input.strip_prefix(&source_prefix) {
+        if let Some(field) = producer_field(input, &source.id) {
             let f = snake_ident(field);
             dsp_chain.extend(quote! {
                 if #driver_var.apply(readings.#f, ts.0).is_err() {

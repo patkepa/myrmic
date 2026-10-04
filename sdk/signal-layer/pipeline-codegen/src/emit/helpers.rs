@@ -3,7 +3,7 @@
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
-use crate::pipeline::{Outlet, PipelineFile, TapStreamKind};
+use crate::pipeline::{Outlet, PipelineFile, TapStreamKind, signal_symbol};
 
 pub(crate) fn snake_ident(s: &str) -> Ident {
     let snake = s.replace('-', "_");
@@ -24,7 +24,7 @@ pub(crate) fn pascal_case(s: &str) -> String {
 }
 
 pub(crate) fn tap_static_ident(name: &str) -> Ident {
-    let upper = name.to_uppercase().replace('-', "_");
+    let upper = signal_symbol(name);
     Ident::new(&format!("TAP_{upper}"), Span::call_site())
 }
 
@@ -34,7 +34,7 @@ pub(crate) fn bus_static_ident(bus_id: &str) -> Ident {
 }
 
 pub(crate) fn outlet_static_ident(name: &str) -> Ident {
-    let upper = name.to_uppercase().replace('-', "_");
+    let upper = signal_symbol(name);
     Ident::new(&format!("OUTLET_{upper}"), Span::call_site())
 }
 
@@ -70,7 +70,7 @@ pub(crate) fn input_root_source<'a>(input: &'a str, pipeline: &'a PipelineFile) 
     let mut cur = input;
     // Bounded by the step count (the graph is acyclic — validated) plus one.
     for _ in 0..=pipeline.steps.len() {
-        if let Some((src, _field)) = cur.split_once('.') {
+        if let Some((src, _field)) = cur.rsplit_once('.') {
             return Some(src);
         }
         let step = pipeline.steps.iter().find(|s| s.id == cur)?;

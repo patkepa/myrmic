@@ -41,6 +41,30 @@ pub fn validate_rust_ident(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_signal_name(name: &str) -> Result<(), String> {
+    if name.split('.').any(str::is_empty) {
+        return Err(format!("`{name}` contains an empty name segment"));
+    }
+    validate_rust_ident(&name.replace('.', "_"))
+}
+
+fn check_signal_symbol<'a>(
+    kind: &str,
+    name: &'a str,
+    seen: &mut std::collections::HashMap<String, &'a str>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let symbol = crate::pipeline::signal_symbol(name);
+    if let Some(previous) = seen.insert(symbol, name) {
+        let message = if previous == name {
+            format!("duplicate {kind} name `{name}`")
+        } else {
+            format!("{kind} names `{previous}` and `{name}` produce the same Rust symbol")
+        };
+        errors.push(ValidationError::new(message));
+    }
+}
+
 /// Capacity of the tap registry in the Signal Layer runtime.
 /// Must stay in sync with `signal_layer_core::MAX_TAPS`.
 const MAX_TAPS: usize = 16;
@@ -175,7 +199,7 @@ pub fn validate_pipeline_against_manifest(
         }
     }
     for tap in &pipeline.taps {
-        if let Err(e) = validate_rust_ident(&tap.name) {
+        if let Err(e) = validate_signal_name(&tap.name) {
             errors.push(ValidationError::new(format!("tap name {e}")));
         }
     }
@@ -212,14 +236,9 @@ pub fn validate_pipeline_against_manifest(
     }
 
     // Duplicate tap names would emit duplicate statics and double-register in the registry.
-    let mut seen_taps: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut seen_taps = std::collections::HashMap::new();
     for tap in &pipeline.taps {
-        if !seen_taps.insert(tap.name.as_str()) {
-            errors.push(ValidationError::new(format!(
-                "duplicate tap name `{}`",
-                tap.name
-            )));
-        }
+        check_signal_symbol("tap", &tap.name, &mut seen_taps, &mut errors);
     }
 
     // Check for duplicate source ids in the pipeline.
@@ -392,10 +411,10 @@ pub fn validate_pipeline_against_manifest(
              holds at most {MAX_OUTLETS}",
         )));
     }
-    let mut seen_outlets: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut seen_outlets = std::collections::HashMap::new();
     let mut driven_devices: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for outlet in &pipeline.outlets {
-        if let Err(e) = validate_rust_ident(&outlet.name) {
+        if let Err(e) = validate_signal_name(&outlet.name) {
             errors.push(ValidationError::new(format!("outlet name {e}")));
         }
         if outlet.name.starts_with('_') {
@@ -404,12 +423,7 @@ pub fn validate_pipeline_against_manifest(
                 outlet.name
             )));
         }
-        if !seen_outlets.insert(outlet.name.as_str()) {
-            errors.push(ValidationError::new(format!(
-                "duplicate outlet name `{}`",
-                outlet.name
-            )));
-        }
+        check_signal_symbol("outlet", &outlet.name, &mut seen_outlets, &mut errors);
         // Single-writer (F1): at most one outlet may drive a given device.
         if !driven_devices.insert(outlet.device.as_str()) {
             errors.push(ValidationError::new(format!(
@@ -511,7 +525,7 @@ pub fn validate_pipeline_against_manifest(
     // Outlet feedback taps (#1018): a status read-back tap `<outlet>.<field>`
     // must be a Retained slot and name a real status output of the driver.
     for tap in &pipeline.taps {
-        let Some((owner, field)) = tap.source.split_once('.') else {
+        let Some((owner, field)) = tap.source.rsplit_once('.') else {
             continue;
         };
         let Some(outlet) = pipeline.outlets.iter().find(|o| o.name == owner) else {
@@ -677,7 +691,7 @@ fn producer_type_bounded(
     if depth == 0 {
         return None; // guard against a step-input cycle
     }
-    if let Some((owner_id, field)) = reference.split_once('.') {
+    if let Some((owner_id, field)) = reference.rsplit_once('.') {
         // A source's sensor output …
         if let Some(src) = pipeline.sources.iter().find(|s| s.id == owner_id) {
             let device = manifest.devices.iter().find(|d| d.id == src.device)?;
