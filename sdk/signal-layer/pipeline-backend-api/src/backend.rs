@@ -4,7 +4,7 @@
 use indexmap::IndexMap;
 use proc_macro2::TokenStream;
 
-use crate::descriptor::DriverSchema;
+use crate::descriptor::{DriverSchema, PinMode};
 use crate::manifest::BoardManifest;
 use crate::scaffold;
 use crate::validate_types::ValidationError;
@@ -71,6 +71,15 @@ pub trait ChipBackend {
     /// should panic — only called when the manifest wires device pins.
     /// Example for ESP32: `esp_hal::gpio::Flex<'static>`
     fn gpio_flex_type(&self) -> TokenStream;
+
+    /// Concrete type for a directional sensor pin, or a legacy flexible pin.
+    fn sensor_pin_type(&self, mode: Option<PinMode>) -> anyhow::Result<TokenStream> {
+        Ok(match mode {
+            Some(PinMode::Input) => self.gpio_input_type(),
+            Some(PinMode::Output { .. }) => self.gpio_output_type(),
+            None => self.gpio_flex_type(),
+        })
+    }
 
     /// Emit a `pipeline_pins!($p:ident)` macro that constructs the WASM
     /// runtime's `Pins` set with the manifest's reserved bus/device pins

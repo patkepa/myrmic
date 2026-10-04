@@ -566,6 +566,7 @@ devices:
                     .iter()
                     .map(std::string::ToString::to_string)
                     .collect(),
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -945,6 +946,7 @@ devices:
             requires: Requires {
                 buses: vec![],
                 optional_pins: vec!["out".into()],
+                ..Default::default()
             },
             writes: Some(DriverWrite {
                 command_type: "DigitalState".into(),
@@ -1178,6 +1180,7 @@ devices:
                 requires: Requires {
                     buses: vec![],
                     optional_pins: vec!["out".into(), "feedback".into()],
+                    ..Default::default()
                 },
                 ..Default::default()
             },

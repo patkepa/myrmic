@@ -52,6 +52,17 @@ pub struct DriverWrite {
     pub mode: OutputMode,
 }
 
+/// Electrical mode of a directional sensor pin.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(tag = "direction", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PinMode {
+    Input,
+    /// The initial level is required so opening a line cannot briefly assert it.
+    Output {
+        initial_high: bool,
+    },
+}
+
 /// Hardware capabilities a driver requires from the board.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Requires {
@@ -59,6 +70,9 @@ pub struct Requires {
     pub buses: Vec<RequiredBus>,
     #[serde(default)]
     pub optional_pins: Vec<String>,
+    /// Electrical modes for entries in `optional_pins`.
+    #[serde(default)]
+    pub pin_modes: IndexMap<String, PinMode>,
 }
 
 /// Configuration field scope.

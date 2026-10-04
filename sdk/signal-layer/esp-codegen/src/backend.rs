@@ -6,7 +6,7 @@ use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 
 use pipeline_codegen::ChipBackend;
-use pipeline_codegen::descriptor::{DriverSchema, OutputMode};
+use pipeline_codegen::descriptor::{DriverSchema, OutputMode, PinMode};
 use pipeline_codegen::manifest::{BoardManifest, BusTransport};
 
 pub struct Esp32Backend;
@@ -213,13 +213,32 @@ impl ChipBackend for Esp32Backend {
                 let param_ident = snake_ident(&format!("{}_{}_gpio", device.id, pin_name));
                 let pin_ty = gpio_ty(pin_num);
                 let gpio_field = Ident::new(&format!("GPIO{pin_num}"), Span::call_site());
-                field_decls.push(quote! {
-                    pub #field_ident: esp_hal::gpio::Flex<'static>,
-                });
+                let mode = driver_schemas
+                    .get(&device.driver)
+                    .and_then(|s| s.requires.pin_modes.get(pin_name))
+                    .copied();
+                let ty = match mode {
+                    Some(PinMode::Input) => self.gpio_input_type(),
+                    Some(PinMode::Output { .. }) => self.gpio_output_type(),
+                    None => self.gpio_flex_type(),
+                };
+                let constructor = match mode {
+                    Some(PinMode::Input) => quote! {
+                        esp_hal::gpio::Input::new(#param_ident, esp_hal::gpio::InputConfig::default())
+                    },
+                    Some(PinMode::Output { initial_high }) => {
+                        let level = if initial_high {
+                            quote!(esp_hal::gpio::Level::High)
+                        } else {
+                            quote!(esp_hal::gpio::Level::Low)
+                        };
+                        quote! { esp_hal::gpio::Output::new(#param_ident, #level, esp_hal::gpio::OutputConfig::default()) }
+                    }
+                    None => quote! { esp_hal::gpio::Flex::new(#param_ident) },
+                };
+                field_decls.push(quote! { pub #field_ident: #ty, });
                 new_params.push(quote! { #param_ident: #pin_ty, });
-                constructions.push(quote! {
-                    let #field_ident = esp_hal::gpio::Flex::new(#param_ident);
-                });
+                constructions.push(quote! { let #field_ident = #constructor; });
                 field_inits.push(quote! { #field_ident, });
                 macro_args.push(quote! { $p.#gpio_field, });
             }
