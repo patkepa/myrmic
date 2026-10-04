@@ -33,6 +33,18 @@ outlet whose device can read its own state back: such an outlet publishes that r
 value, and the feedback section later on this page shows one. An outlet also exposes `.error` in
 the same form, carrying faults rather than a reading.
 
+## Public signal names
+
+Tap and outlet names can contain dotted namespaces, such as `nfc.v1.observation`.
+The registry preserves the exact name. Generated Rust symbols uppercase it and
+replace dots/hyphens with underscores; names that collide after this conversion
+are rejected within each registry. Empty segments and leading underscores are
+not allowed. Other identifier rules are unchanged.
+
+Outlet feedback uses the full name: `terminal.v1.relay.contact` refers to the
+`contact` field of `terminal.v1.relay`. Source and step IDs keep their existing
+format.
+
 ## Sources
 
 A source binds a device from your board file and says how to run it.
