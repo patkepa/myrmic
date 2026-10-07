@@ -955,6 +955,50 @@ mod tests {
     }
 
     #[test]
+    fn embedded_boot_death_preserves_restart_intent_until_old_rows_are_released() {
+        let specs = [root_spec("r", RestartType::Always, 5)];
+        // This is the shared record emitted by the ESP32 boot sweep, before
+        // it releases its old placement and instance rows.
+        let signal = cell_protocol::RootDeath {
+            sri: sri("r"),
+            gen_id: g(1),
+            reason: LostReason::NodeLost,
+        };
+        let wire = postcard::to_allocvec(&signal).unwrap();
+        let deaths = [postcard::from_bytes::<RootDeath>(&wire).unwrap()];
+        let mut budget = RestartBudget::new();
+        let mut sweep = RestartSweep::default();
+        let now = Instant::now();
+        let pending = plan_root_restarts(
+            &specs,
+            &deaths,
+            &[entry_gen(sri("r"), rt(1), g(1))],
+            &[],
+            &mut budget,
+            &mut sweep,
+            now,
+        );
+        assert_eq!(pending, RestartPlan::default());
+        // Both consecutive scans must restart rather than classify the
+        // missing root as deliberate removal. A failed redeploy retains
+        // the signal, so the second scan still has a recoverable root.
+        for offset in [1, 2] {
+            let plan = plan_root_restarts(
+                &specs,
+                &deaths,
+                &[],
+                &[],
+                &mut budget,
+                &mut sweep,
+                now + Duration::from_secs(offset),
+            );
+            assert_eq!(plan.restart, vec![sri("r")]);
+            assert!(plan.drop_specs.is_empty());
+            assert!(plan.clear_deaths.is_empty());
+        }
+    }
+
+    #[test]
     fn on_error_clean_stop_is_terminal() {
         let plan = plan_of(
             &[root_spec("r", RestartType::OnError, 5)],

@@ -11,20 +11,11 @@ use db_client::v1::{
     models::{TxId, tb_delete, tb_get, tb_insert, tb_list},
 };
 use myrmic_common::cells::LostReason;
-use serde::{Deserialize, Serialize};
 use zenoh::Session;
 
 use crate::{Result, custom_err};
 
-/// A root that died on a live node, and why. `gen_id` is the dead instance's
-/// generation, so the orchestrator can tell an uncleaned corpse from a root
-/// already restarted at a newer generation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RootDeath {
-    pub sri: Sri,
-    pub gen_id: Gen,
-    pub reason: LostReason,
-}
+pub use cell_protocol::RootDeath;
 
 /// Records a root's death (last write wins for a given SRI).
 pub async fn record(session: &Session, sri: Sri, gen_id: Gen, reason: LostReason) -> Result<()> {

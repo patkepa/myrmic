@@ -13,8 +13,8 @@ use cell_protocol::supervision::{
 };
 use cell_protocol::{
     CellAttachment, CellInstance, INSTANCE_REGISTRY_TABLE, MailboxCommand, NODE_LEASE_TABLE,
-    NodeLease, PLACEMENT_TABLE, PlacementEntry, PlacementKind, RuntimeId, Sri,
-    instance_registry_scope, node_lease_scope, placement_scope,
+    NodeLease, PLACEMENT_TABLE, PlacementEntry, PlacementKind, ROOT_DEATH_TABLE, RootDeath,
+    RuntimeId, Sri, instance_registry_scope, node_lease_scope, placement_scope, root_death_scope,
 };
 use db_client::v1::models as db_models;
 use db_client::v1::{Client, models::Scope};
@@ -88,8 +88,8 @@ pub(crate) async fn verify_tick(
 /// Sweeps placement rows naming this node from a previous boot. The node id
 /// is stable (derived from the MAC) and cells never resume after a reboot,
 /// so any placement naming this node that it is not hosting is a remnant
-/// whose body died with the power: the parent is notified (crashed) and the
-/// rows are released. Retried every tick until it completes cleanly;
+/// whose body died with the power: the parent is notified (crashed), or a
+/// root death is recorded (node lost), before the rows are released. Retried every tick until it completes cleanly;
 /// returns whether it did. The hosted cell (if any) is skipped.
 pub(crate) async fn boot_sweep(
     client: &Client,
@@ -114,6 +114,15 @@ pub(crate) async fn boot_sweep(
         );
         match read_instance(client, &entry.sri).await {
             RowRead::Ok(instance) => {
+                // A root has no parent to notify. Persist its death before
+                // releasing either row, otherwise the orchestrator mistakes
+                // the reboot for an operator removal and erases restart intent.
+                if instance.lineage.parent.is_none()
+                    && !record_boot_death(client, entry.sri, entry.gen_id).await
+                {
+                    done = false;
+                    continue;
+                }
                 if !instance.lineage.detached
                     && let Some(parent) = instance.lineage.parent
                 {
@@ -125,7 +134,15 @@ pub(crate) async fn boot_sweep(
                     }
                 }
             }
-            RowRead::Absent => {}
+            RowRead::Absent => {
+                // A previous partial cleanup may already have lost the
+                // instance row. A signal without a root spec is harmless;
+                // losing one with a spec would strand that root forever.
+                if !record_boot_death(client, entry.sri, entry.gen_id).await {
+                    done = false;
+                    continue;
+                }
+            }
             RowRead::Failed => {
                 done = false;
                 continue;
@@ -134,6 +151,40 @@ pub(crate) async fn boot_sweep(
         owed.push(entry.sri);
     }
     done
+}
+
+/// Commit the restart signal before queuing any old-incarnation row cleanup.
+/// A timeout/rejected write leaves the placement intact for the next sweep.
+async fn record_boot_death(client: &Client, sri: Sri, gen_id: cell_protocol::Gen) -> bool {
+    let death = RootDeath {
+        sri,
+        gen_id,
+        reason: LostReason::NodeLost,
+    };
+    let Ok(value) = postcard::to_allocvec(&death) else {
+        return false;
+    };
+    let write = client.write_tx_in(root_death_scope(), async move |client, id| {
+        client
+            .send(db_models::tb_insert::Request {
+                id,
+                op: db_models::tb_insert::Op {
+                    scope: root_death_scope(),
+                    table: ROOT_DEATH_TABLE.to_owned(),
+                    eid: Some(sri.to_string().into_bytes()),
+                    value,
+                },
+            })
+            .await?
+            .map_err(|err| zerror!("{}", err.message))?;
+        Ok(())
+    });
+    if matches!(with_timeout(DEFAULT_TIMEOUT, write).await, Ok(Ok(()))) {
+        true
+    } else {
+        log::warn!("[sweep] root death for '{sri}' failed; retaining rows to retry");
+        false
+    }
 }
 
 /// Delivers `cell_lost { crashed }` into the parent's db mailbox, exactly as
