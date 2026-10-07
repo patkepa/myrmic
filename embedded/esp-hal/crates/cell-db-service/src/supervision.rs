@@ -13,8 +13,8 @@ use cell_protocol::supervision::{
 };
 use cell_protocol::{
     CellAttachment, CellInstance, INSTANCE_REGISTRY_TABLE, MailboxCommand, NODE_LEASE_TABLE,
-    NodeLease, PLACEMENT_TABLE, PlacementEntry, PlacementKind, ROOT_DEATH_TABLE, RootDeath,
-    RuntimeId, Sri, instance_registry_scope, node_lease_scope, placement_scope, root_death_scope,
+    NodeLease, PLACEMENT_TABLE, PlacementEntry, PlacementKind, ROOT_DEATH_TABLE, RuntimeId, Sri,
+    instance_registry_scope, node_lease_scope, placement_scope, root_death_scope,
 };
 use db_client::v1::models as db_models;
 use db_client::v1::{Client, models::Scope};
@@ -112,17 +112,8 @@ pub(crate) async fn boot_sweep(
             "[sweep] releasing '{sri}' from a previous boot",
             sri = entry.sri
         );
-        match read_instance(client, &entry.sri).await {
+        let root = match read_instance(client, &entry.sri).await {
             RowRead::Ok(instance) => {
-                // A root has no parent to notify. Persist its death before
-                // releasing either row, otherwise the orchestrator mistakes
-                // the reboot for an operator removal and erases restart intent.
-                if instance.lineage.parent.is_none()
-                    && !record_boot_death(client, entry.sri, entry.gen_id).await
-                {
-                    done = false;
-                    continue;
-                }
                 if !instance.lineage.detached
                     && let Some(parent) = instance.lineage.parent
                 {
@@ -133,20 +124,20 @@ pub(crate) async fn boot_sweep(
                         continue;
                     }
                 }
+                instance.lineage.parent.is_none()
             }
-            RowRead::Absent => {
-                // A previous partial cleanup may already have lost the
-                // instance row. A signal without a root spec is harmless;
-                // losing one with a spec would strand that root forever.
-                if !record_boot_death(client, entry.sri, entry.gen_id).await {
-                    done = false;
-                    continue;
-                }
-            }
+            // With no instance, conservatively signal death; unmatched roots
+            // are discarded by the orchestrator.
+            RowRead::Absent => true,
             RowRead::Failed => {
                 done = false;
                 continue;
             }
+        };
+        // Preserve restart intent before cleanup can resemble operator removal.
+        if root && !record_boot_death(client, entry.sri, entry.gen_id).await {
+            done = false;
+            continue;
         }
         owed.push(entry.sri);
     }
@@ -156,6 +147,13 @@ pub(crate) async fn boot_sweep(
 /// Commit the restart signal before queuing any old-incarnation row cleanup.
 /// A timeout/rejected write leaves the placement intact for the next sweep.
 async fn record_boot_death(client: &Client, sri: Sri, gen_id: cell_protocol::Gen) -> bool {
+    // Match sorg_common::cells::root_death::RootDeath's postcard field order.
+    #[derive(serde::Serialize)]
+    struct RootDeath {
+        sri: Sri,
+        gen_id: cell_protocol::Gen,
+        reason: LostReason,
+    }
     let death = RootDeath {
         sri,
         gen_id,

@@ -96,18 +96,6 @@ const ROOT_DEATH_DB: &str = "root-death";
 /// consumes it to drive a restart decision, then deletes it. Transient.
 pub const ROOT_DEATH_TABLE: &str = "entries";
 
-/// A root's dead incarnation and the reason it needs a restart decision.
-/// Shared by Linux and embedded hosts so both publish the same wire format.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RootDeath {
-    /// Logical identity of the dead root.
-    pub sri: Sri,
-    /// Generation of the dead incarnation, used to fence stale signals.
-    pub gen_id: Gen,
-    /// Cause of death, interpreted against the root's restart policy.
-    pub reason: myrmic_common::cells::LostReason,
-}
-
 /// Returns the DB scope for the pending root-death signals.
 pub fn root_death_scope() -> Scope {
     Scope::new(NAMESPACE_SORG, ROOT_DEATH_DB, "p")
