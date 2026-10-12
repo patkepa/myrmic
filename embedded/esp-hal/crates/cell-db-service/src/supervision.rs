@@ -13,8 +13,8 @@ use cell_protocol::supervision::{
 };
 use cell_protocol::{
     CellAttachment, CellInstance, INSTANCE_REGISTRY_TABLE, MailboxCommand, NODE_LEASE_TABLE,
-    NodeLease, PLACEMENT_TABLE, PlacementEntry, PlacementKind, ROOT_DEATH_TABLE, RuntimeId, Sri,
-    instance_registry_scope, node_lease_scope, placement_scope, root_death_scope,
+    NodeLease, PLACEMENT_TABLE, PlacementEntry, PlacementKind, ROOT_DEATH_TABLE, RootDeath,
+    RuntimeId, Sri, instance_registry_scope, node_lease_scope, placement_scope, root_death_scope,
 };
 use db_client::v1::models as db_models;
 use db_client::v1::{Client, models::Scope};
@@ -147,13 +147,6 @@ pub(crate) async fn boot_sweep(
 /// Commit the restart signal before queuing any old-incarnation row cleanup.
 /// A timeout/rejected write leaves the placement intact for the next sweep.
 async fn record_boot_death(client: &Client, sri: Sri, gen_id: cell_protocol::Gen) -> bool {
-    // Match sorg_common::cells::root_death::RootDeath's postcard field order.
-    #[derive(serde::Serialize)]
-    struct RootDeath {
-        sri: Sri,
-        gen_id: cell_protocol::Gen,
-        reason: LostReason,
-    }
     let death = RootDeath {
         sri,
         gen_id,
