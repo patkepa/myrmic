@@ -309,8 +309,9 @@ fn send_tick(export_name: &heapless::String<64>, completed: Option<TimerCompleti
         export_name: export_name.clone(),
         completed,
     };
-    // Non-blocking try_send — if the cell message channel is full, drop the tick
-    if CELL_MSG_CHANNEL.try_send(msg).is_err() {
+    // Ticks are lossy, commands are not: leave the last slot free so a busy timer cannot keep the
+    // channel full and starve the db service's command hand-over.
+    if CELL_MSG_CHANNEL.free_capacity() <= 1 || CELL_MSG_CHANNEL.try_send(msg).is_err() {
         log::debug!("timer tick dropped — cell message channel full");
         false
     } else {

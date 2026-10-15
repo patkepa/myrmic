@@ -39,6 +39,9 @@ fn subscription_fallback_period(session_lease: Duration) -> Duration {
     Duration::from_secs(session_lease.as_secs() + 5)
 }
 const EVENTS_POLL_PERIOD: Duration = Duration::from_millis(250);
+/// Retry delay for a command deferred by a full cell message channel. No poke announces free space,
+/// so without it the command would wait out the full mailbox fallback period.
+const COMMAND_DEFERRED_RETRY: Duration = Duration::from_millis(100);
 /// Fencing verification cadence (spec §3). Slower than the Linux exec's 10s
 /// to respect the radio budget: three point reads per pass while hosting a
 /// cell (own row, parent row, parent node's lease; none while idle), giving
@@ -279,8 +282,13 @@ pub async fn service(
                 }
 
                 if let Some((sri, _)) = cell.as_ref() {
-                    command_in_flight =
-                        forward_next_command(&client, sri, &mut last_delivered).await;
+                    command_in_flight = forward_next_command(
+                        &client,
+                        sri,
+                        &mut last_delivered,
+                        &mut next_mailbox_fallback,
+                    )
+                    .await;
                 }
             }
             // Subscribed-event polling
@@ -471,7 +479,12 @@ async fn resync_mailbox_subscription(
 ///
 /// A command already handed over and still at the head is refused: its handler failed, so retrying
 /// it waits for the next poke or fallback tick rather than spinning on it here.
-async fn forward_next_command(client: &Client, sri: &Sri, last_delivered: &mut Option<Id>) -> bool {
+async fn forward_next_command(
+    client: &Client,
+    sri: &Sri,
+    last_delivered: &mut Option<Id>,
+    next_mailbox_fallback: &mut Instant,
+) -> bool {
     let Some(cell_msg) = mailbox::next_command(client, sri).await else {
         *last_delivered = None;
         return false;
@@ -487,10 +500,11 @@ async fn forward_next_command(client: &Client, sri: &Sri, last_delivered: &mut O
     reset_command_handled();
 
     // A full channel is no loss: the command is still in the mailbox, so it is
-    // simply read again on the next poke.
+    // simply read again shortly.
     if CELL_MSG_CHANNEL.try_send(cell_msg).is_err() {
         log::debug!("[db-client] command deferred — cell message channel full");
         *last_delivered = None;
+        *next_mailbox_fallback = Instant::now() + COMMAND_DEFERRED_RETRY;
         return false;
     }
 

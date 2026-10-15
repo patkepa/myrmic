@@ -50,7 +50,7 @@ flume = { workspace = true }
 
 axum = { workspace = true, features = ["macros", "ws"] }
 axum-server = { version = "0.7.3", features = ["tls-rustls-no-provider"] }
-rustls = { version = "0.23.35", default-features = false, features = [
+rustls = { version = "0.23.46", default-features = false, features = [
     "logging",
     "std",
     "ring",

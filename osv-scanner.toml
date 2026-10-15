@@ -63,3 +63,12 @@ reason = "rustybuzz is unmaintained; transitive dep of typst, no safe upgrade av
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0192"
 reason = "ttf-parser is unmaintained; transitive dep of typst, no safe upgrade available."
+
+# object 0.37/0.39 pin ruzstd ^0.8 (via espflash and backtrace); the fix is only in 0.9.1.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0344"
+reason = "ruzstd 0.8 pinned by object via espflash/backtrace; host-only ELF/debuginfo decoding of our own binaries."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0449"
+reason = "The unsafe-libyaml crate is unmaintained, but needed by zenoh-config via serde_yaml. Only parses our own config files."

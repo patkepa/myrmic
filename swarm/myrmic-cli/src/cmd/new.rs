@@ -171,8 +171,22 @@ pub fn handle(ctx: &Ctx, cmd: New) -> anyhow::Result<()> {
     }
 
     let repo = crate::utils::resolve_repo(ctx, repo.as_deref())?;
+    let sdk_lock = match &repo {
+        models::Repo::Path(sdk) => Some(sdk.join("Cargo.lock")),
+        models::Repo::Version(_) | models::Repo::Git(..) => None,
+    };
 
     render_project(repo, name, firmware, pipeline, &path)?;
+
+    // Start from the versions the local SDK is tested with, so a crate released since then is
+    // not pulled in by the first build.
+    if let Some(sdk_lock) = sdk_lock.filter(|lock| lock.exists()) {
+        let dst = path.join("Cargo.lock");
+        if !dst.exists() {
+            std::fs::copy(&sdk_lock, &dst)
+                .with_context(|| format!("failed to copy {}", sdk_lock.display()))?;
+        }
+    }
 
     // A firmware crate also gets the partition layout for its chip - the same
     // per-chip files `modem-esp32` builds with (C5/C6 = 4 MB, C61 = 8 MB).

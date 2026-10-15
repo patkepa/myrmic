@@ -90,7 +90,10 @@ ignore = [
     # https://rustsec.org/advisories/RUSTSEC-2026-0192
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz is unmaintained; transitive dep of typst, no safe upgrade available." },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained; transitive dep of typst, no safe upgrade available." },
+    # object 0.37/0.39 pin ruzstd ^0.8 (via espflash and backtrace); the fix is only in 0.9.1.
+    { id = "RUSTSEC-2026-0344", reason = "ruzstd 0.8 pinned by object via espflash/backtrace; host-only ELF/debuginfo decoding of our own binaries." },
     # Uncritical
+    { id = "RUSTSEC-2024-0449", reason = "The unsafe-libyaml crate is unmaintained, but needed by zenoh-config via serde_yaml. Only parses our own config files." },
     { id = "RUSTSEC-2024-0388", reason = "The derivative crate is unmaintained, but needed by jrsonnet and zenoh-plugin-mqtt. Should be uncritical, because it only adds compile time helpers." },
     { id = "RUSTSEC-2024-0436", reason = "The paste crate is unmaintained, but needed by zenoh. Should be uncritical, because it only adds compile time helpers." },
     { id = "RUSTSEC-2024-0320", reason = "The yaml-rust crate is unmaintained, but needed by rumqtt and jrsonnet. Should be uncritical, because we do not use the yaml feature of the crate." },

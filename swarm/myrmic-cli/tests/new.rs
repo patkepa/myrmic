@@ -352,6 +352,41 @@ fn new_firmware_pipeline_scaffolds_board_and_pipeline() {
 }
 
 #[test]
+fn new_seeds_the_lockfile_of_a_local_sdk() {
+    let project = tempfile::TempDir::with_prefix("myrmic-").expect("can always create a tempdir");
+    let seeded = project.path().join("seeded");
+    let kept = project.path().join("kept");
+    std::fs::create_dir_all(&kept).expect("create existing dir");
+    std::fs::write(kept.join("Cargo.lock"), "user lock").expect("write user lock");
+
+    for dir in [&seeded, &kept] {
+        let output = Command::new(env!("CARGO_BIN_EXE_myrmic"))
+            .args(["new", "--firmware=esp32c6"])
+            .arg(dir)
+            .arg("--sdk")
+            .arg(repo_root())
+            .output()
+            .expect("failed to run myrmic new");
+        assert!(
+            output.status.success(),
+            "myrmic new failed\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let sdk_lock = std::fs::read_to_string(repo_root().join("Cargo.lock")).expect("sdk lock");
+    let seeded_lock = std::fs::read_to_string(seeded.join("Cargo.lock")).expect("seeded lock");
+    assert_eq!(seeded_lock, sdk_lock, "the sdk lockfile is copied as is");
+    let kept_lock = std::fs::read_to_string(kept.join("Cargo.lock")).expect("kept lock");
+    assert_eq!(
+        kept_lock, "user lock",
+        "an existing lockfile is not overwritten"
+    );
+
+    let _ = project.close();
+}
+
+#[test]
 fn new_into_existing_dir_preserves_files_on_render_failure() {
     let project = tempfile::TempDir::with_prefix("myrmic-").expect("can always create a tempdir");
     let dir = project.path().join("existing");
