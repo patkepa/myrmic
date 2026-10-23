@@ -44,6 +44,11 @@ egress:
     payload: "${json:config}"
 ```
 
+The example above defines a bridge cell that sits between an MQTT broker and the swarm, carrying messages both ways:
+
+- **Inbound** - each reading the broker pushes to `sensors/temperature` becomes a swarm event any cell can subscribe to.
+- **Outbound** - a cell can set one device's threshold by sending the bridge a command, which it publishes to `devices/<device_id>/threshold` - the device id is taken from the command's payload.
+
 ## HTTP Bridge
 Connects to an external HTTP service. The cell sends a command to the bridge, which makes an HTTP request and returns the response.
 
@@ -109,6 +114,13 @@ endpoints:
       200: "${json:Device}"
       404: "${json:error}"
 ```
+
+The example above defines an HTTP bridge cell that exposes two endpoints of an external HTTP service to the swarm. A cell sends one of these commands to the bridge:
+
+- **`store_reading`** - the bridge posts the reading to `/api/devices/<device_id>/readings` - the device id is taken from the command's payload.
+- **`get_device`** - the bridge fetches one device from `/api/devices/<device_id>` and returns it as a typed value.
+
+For both, the bridge reads the bearer token from the swarm key-value store and puts it in the `Authorization` header of the request.
 
 ## Template Syntax
 From inside your cell, a bridge looks like any other cell - you send commands to it and receive events from it. But behind the scenes, the bridge has to translate those commands and events to and from raw MQTT messages or HTTP requests. Something has to describe that mapping - which field becomes the topic, which becomes the payload, how to decode an incoming message into an event field. Template syntax is how you define that translation, directly in the config.

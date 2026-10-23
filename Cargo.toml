@@ -167,6 +167,7 @@ default-members = [
     # Cell fixtures. `cargo test` builds each lib as a test binary against std,
     # so they belong in a default build even though most of them are compiled
     # for wasm32 in anger.
+    "tests/fixtures/cell-ble-sensor-client",
     "tests/fixtures/cell-blinky-periodic-logic",
     "tests/fixtures/cell-counter-caller-logic",
     "tests/fixtures/cell-event-sub-logic",
@@ -213,7 +214,7 @@ default-members = [
 [workspace.package]
 # The release version. A release-prep commit sets this to the version about to be
 # cut, and a release tag that disagrees with it is rejected.
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.96"
 # Zone A (platform). Crates outside this zone declare their own license;
@@ -445,7 +446,7 @@ which = "8.0.2"
 libc = "0.2.186"
 
 tryhard = "0.5.2"
-wasmtime = "49.0.3"
+wasmtime = "49.0.4"
 
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 
@@ -465,7 +466,7 @@ vecmap-rs = "0.2.4"
 
 byteorder = "1.5.0"
 memchr = "2.7.5"
-fjall = { git = "https://github.com/peeriot/fjall.git", rev = "04e2ad70" }
+fjall = { git = "https://github.com/peeriot/fjall.git", rev = "589d861e" }
 #fjall = { path = "../fjall" }
 #fjall = { version = "3.1.5" }
 tempfile = { version = "3.17.1", default-features = false }
@@ -571,9 +572,9 @@ swarm-api = { path = "swarm/swarm-api", default-features = false }
 bluer = "0.17.4"
 
 aot-compiler = { path = "sdk/tools/aot-compiler" }
-myrmic-common = { path = "sdk/myrmic-common", version = "0.7.0" }
+myrmic-common = { path = "sdk/myrmic-common", version = "0.7.1" }
 myrmic-sdk = { path = "sdk/myrmic-sdk" }
-myrmic-sdk-macros = { path = "sdk/myrmic-sdk-macros", version = "0.7.0" }
+myrmic-sdk-macros = { path = "sdk/myrmic-sdk-macros", version = "0.7.1" }
 wasm-runtime-macros = { path = "embedded/esp-hal/crates/wasm-runtime-macros" }
 wasm-runtime = { path = "embedded/esp-hal/crates/wasm-runtime" }
 wasm-storage = { path = "embedded/esp-hal/crates/wasm-storage", default-features = false }
@@ -591,7 +592,7 @@ esp-firmware-macros = { path = "embedded/esp-hal/crates/esp-firmware-macros" }
 esp-firmware-build = { path = "embedded/esp-hal/crates/esp-firmware-build" }
 
 # Signal Layer core
-signal-layer-types = { path = "sdk/signal-layer/signal-layer-types", package = "myrmic-signal-layer-types", version = "0.7.0", default-features = false }
+signal-layer-types = { path = "sdk/signal-layer/signal-layer-types", package = "myrmic-signal-layer-types", version = "0.7.1", default-features = false }
 signal-layer-core = { path = "sdk/signal-layer/signal-layer-core" }
 pipeline-codegen = { path = "sdk/signal-layer/pipeline-codegen" }
 pipeline-backend-api = { path = "sdk/signal-layer/pipeline-backend-api" }

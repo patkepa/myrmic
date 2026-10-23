@@ -100,6 +100,7 @@ pub async fn service(
     let mut last_deploy_id = None;
     let mut subscribed_events: Vec<(Event, Cursor)> = Vec::new();
     let mut awaiting_deletion_confirmation: bool = false;
+    let mut pending_deploy: Option<deploy::PendingDeploy> = None;
 
     let node_lease_renewal_interval = node_lease_renewal_interval.clamp(
         core::time::Duration::from_secs(5),
@@ -188,11 +189,20 @@ pub async fn service(
         )
         .await;
 
-        // Deployment: wait for a subscription poke, otherwise the fallback timer.
-        let deployment_fut = wait_poke_or_fallback(
-            deployment_sub.as_mut(),
-            next_deployment_fallback,
-            "deployment",
+        // Deployment: a subscription poke, the fallback timer, or the runtime freeing up.
+        let deployment_fut = select(
+            wait_poke_or_fallback(
+                deployment_sub.as_mut(),
+                next_deployment_fallback,
+                "deployment",
+            ),
+            async {
+                if pending_deploy.is_none() {
+                    pending::<()>().await;
+                } else {
+                    deploy::runtime_ready().await;
+                }
+            },
         );
 
         // Mailbox: park while no cell is deployed. While a command is in flight, wait for the
@@ -229,19 +239,24 @@ pub async fn service(
         .await
         {
             // Deployment notification (or fallback)
-            Either6::First(()) => {
+            Either6::First(Either::First(())) => {
                 deploy::handle(
                     &client,
                     zid,
                     &mut last_deploy_id,
-                    wasm_transfer,
                     cell.as_ref(),
                     native.is_some(),
                     &mut awaiting_deletion_confirmation,
-                    &mut watched,
+                    watched.as_ref(),
+                    &mut pending_deploy,
                 )
                 .await;
                 next_deployment_fallback = Instant::now() + subscription_fallback_period;
+            }
+            Either6::First(Either::Second(())) => {
+                if let Some(pending) = pending_deploy.take() {
+                    deploy::run_pending(&client, pending, wasm_transfer, &mut watched).await;
+                }
             }
             Either6::Second(db_client_req) => {
                 requests::handle(

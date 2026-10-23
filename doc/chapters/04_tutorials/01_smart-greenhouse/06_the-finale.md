@@ -1,6 +1,6 @@
 # Part 6 - The Finale
 
-This is the last part of the [Smart Greenhouse](../02_smart-greenhouse.md) tutorial. You play with the running system, tear it down - and then bring the whole application back with a single command, learning how `app_specs.yml` binds five cells into one deployable unit.
+This is the last part of the [Smart Greenhouse](../01_smart-greenhouse.md) tutorial. You play with the running system, tear it down - and then bring the whole application back with a single command, learning how `app_specs.yml` binds five cells into one deployable unit.
 
 ---
 

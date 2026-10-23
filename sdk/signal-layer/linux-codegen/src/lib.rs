@@ -514,6 +514,9 @@ fn generate_cargo_toml(
         );
     }
 
+    // tokio: only what the generated crate calls (`#[tokio::main]`, `spawn`,
+    // `time::interval`, `signal::ctrl_c`); its tests need nothing more. The
+    // runtime crates declare their own features.
     format!(
         r#"[workspace]
 
@@ -532,14 +535,13 @@ signal-layer-linux-rt = {{ path = "../../../swarm/signal-layer/signal-layer-linu
 linux-i2c-shim        = {{ path = "../../../swarm/signal-layer/linux-i2c-shim" }}
 {gpio_shim_dep}{spi_shim_dep}signal-layer-core     = {{ path = "../signal-layer-core" }}
 signal-layer-types    = {{ package = "myrmic-signal-layer-types", path = "../signal-layer-types" }}
-tokio                 = {{ version = "1", features = ["full"] }}
+tokio                 = {{ version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }}
 tokio-stream          = {{ version = "0.1", features = ["time"] }}
 critical-section      = {{ version = "1", features = ["std"] }}
 log                   = {{ version = "0.4", default-features = false }}
 env_logger            = "0.11"
 {driver_deps}{step_deps}
 [dev-dependencies]
-tokio    = {{ version = "1", features = ["full"] }}
 tempfile = "3"
 "#
     )

@@ -1,6 +1,6 @@
 # Part 5 - The Dashboard
 
-This is Part 5 of the [Smart Greenhouse](../02_smart-greenhouse.md) tutorial. You put the bed in the browser - learning how a cell serves a web page through the gateway.
+This is Part 5 of the [Smart Greenhouse](../01_smart-greenhouse.md) tutorial. You put the bed in the browser - learning how a cell serves a web page through the gateway.
 
 It continues where [Part 4](./04_the-irrigation-agent.md) left off: all four cells are deployed and the greenhouse is watering itself.
 

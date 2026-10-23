@@ -1,6 +1,6 @@
 # Part 3 - The Grow-Bed
 
-This is Part 3 of the [Smart Greenhouse](../02_smart-greenhouse.md) tutorial. You build the **Asset Cell** that owns the canonical state of the bed - learning how to model structured state and share it on the network.
+This is Part 3 of the [Smart Greenhouse](../01_smart-greenhouse.md) tutorial. You build the **Asset Cell** that owns the canonical state of the bed - learning how to model structured state and share it on the network.
 
 It continues where [Part 2](./02_the-pump.md) left off: the runtime is running in Terminal 1, the sensor and the pump are deployed, and Terminal 3 is your event window.
 

@@ -7,7 +7,7 @@ pub(crate) mod cell_task;
 mod observability;
 pub(crate) mod state;
 
-use cell_protocol::{Gen, Sri};
+use cell_protocol::{BlobHash, Gen, Sri};
 use db_client::Session;
 use opentelemetry::trace::SpanContext;
 use sorg_common::{PoisonSnd, SpawnLineage, bail, custom_err};
@@ -134,15 +134,14 @@ pub(crate) async fn run_cell(
     wasm_env: &WasmEnvironment,
     session: &Session,
     sri: Sri,
-    class_name: &str,
+    class: BlobHash,
     gen_id: Gen,
     lineage: SpawnLineage,
     arguments: Option<Vec<u8>>,
     mailbox_poll_interval: Duration,
     mailbox_batch_size: usize,
 ) -> Result<(PoisonSnd, tokio::task::JoinHandle<Result<()>>)> {
-    let event_handlers =
-        event_handlers_from_cell_binary(&wasm_env.engine, session, class_name).await?;
+    let event_handlers = event_handlers_from_cell_binary(&wasm_env.engine, session, class).await?;
 
     let (mut cell_state, msg_rcv, ready_rcv) = CellState::state_and_msg_rcv(
         sri,
@@ -168,7 +167,7 @@ pub(crate) async fn run_cell(
 
     let instance = load_module_cell(
         session,
-        class_name,
+        class,
         &wasm_env.engine,
         &mut store,
         &wasm_env.linker,
@@ -176,7 +175,7 @@ pub(crate) async fn run_cell(
     .await?;
 
     call_cell_inits(
-        &instance, &mut store, session, &sri, class_name, gen_id, &lineage, arguments,
+        &instance, &mut store, session, &sri, class, gen_id, &lineage, arguments,
     )
     .await?;
 
@@ -193,23 +192,13 @@ pub(crate) async fn run_cell(
     Ok((poison_snd, handle))
 }
 
-/// Whether this incarnation still owes its `#[init]`: no registry row, or a
-/// corpse row from an older incarnation whose erase hasn't replicated here
-/// yet (the init tx's entry write supersedes it — restarts mint strictly
-/// greater generations). A row at or past this deploy's generation is
-/// authoritative: same gen means init already ran, newer means this body was
-/// superseded mid-load and must not clobber its successor's row.
-fn init_pending(existing: Option<Gen>, gen_id: Gen) -> bool {
-    existing.is_none_or(|g| g < gen_id)
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn call_cell_inits(
     instance: &Instance,
     store: &mut Store<CellState>,
     session: &Session,
     sri: &Sri,
-    class_name: &str,
+    class: BlobHash,
     gen_id: Gen,
     lineage: &SpawnLineage,
     arguments: Option<Vec<u8>>,
@@ -222,7 +211,7 @@ async fn call_cell_inits(
     let existing = sorg_common::instance_registry::get_instance(session, sri)
         .await?
         .map(|record| record.gen_id);
-    if !init_pending(existing, gen_id) {
+    if !cell_protocol::supervision::init_pending(existing, gen_id) {
         return Ok(());
     }
 
@@ -235,7 +224,7 @@ async fn call_cell_inits(
 
     let record = cell_protocol::CellInstance {
         sri: *sri,
-        class_name: class_name.to_owned(),
+        class,
         gen_id,
         lineage: lineage.clone(),
     };
@@ -317,9 +306,9 @@ async fn call_init(
 pub(crate) async fn event_handlers_from_cell_binary(
     engine: &Engine,
     session: &Session,
-    class_name: &str,
+    class: BlobHash,
 ) -> Result<HashSet<String>> {
-    let binary = load_wasm_binary_from_class(session, class_name).await?;
+    let binary = load_wasm_binary_from_class(session, class).await?;
     let module = Module::from_binary(engine, &binary)?;
 
     let mut event_handlers = HashSet::new();
@@ -332,33 +321,4 @@ pub(crate) async fn event_handlers_from_cell_binary(
     }
 
     Ok(event_handlers)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn g(time: u64) -> Gen {
-        Gen::from_parts(time, 1)
-    }
-
-    #[test]
-    fn init_runs_for_an_unregistered_sri() {
-        assert!(init_pending(None, g(2)));
-    }
-
-    #[test]
-    fn stale_corpse_row_does_not_suppress_init() {
-        assert!(init_pending(Some(g(1)), g(2)));
-    }
-
-    #[test]
-    fn own_registration_skips_init() {
-        assert!(!init_pending(Some(g(2)), g(2)));
-    }
-
-    #[test]
-    fn newer_incarnations_row_is_left_alone() {
-        assert!(!init_pending(Some(g(3)), g(2)));
-    }
 }

@@ -1,6 +1,6 @@
 # Part 2 - The Pump
 
-This is Part 2 of the [Smart Greenhouse](../02_smart-greenhouse.md) tutorial. You build the greenhouse's first actuator - the irrigation pump - and learn about *cell commands*: how a cell exposes them, and how to send them from the CLI.
+This is Part 2 of the [Smart Greenhouse](../01_smart-greenhouse.md) tutorial. You build the greenhouse's first actuator - the irrigation pump - and learn about *cell commands*: how a cell exposes them, and how to send them from the CLI.
 
 It continues where [Part 1](./01_the-mock-sensor.md) left off: the runtime is running in Terminal 1, the moisture sensor is deployed and publishing, and Terminal 3 is subscribed to its readings.
 

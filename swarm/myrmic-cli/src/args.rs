@@ -97,12 +97,17 @@ pub enum Command {
     ///
     /// Creates a fresh Rust crate wired up against peeriot's `myrmic_sdk`, ready to build.
     New(new::New),
+    /// Scaffold for the Signal Layer: a pipeline project, drivers and processing steps.
+    ///
+    /// `myrmic sl` is the short spelling.
+    #[clap(visible_alias = "sl")]
+    SignalLayer(signal_layer::SignalLayer),
     /// Build a cell, a firmware, or an application suite.
     ///
     /// Compiles the cell to the provided platform (default is `linux`)
     /// Can also be used to generate an api file to provide external parties your cell's API.
     ///
-    /// A crate whose `[package.metadata.myrmic]` names a `firmware` chip is built
+    /// A crate whose `[package.metadata.myrmic]` sets `firmware = "esp32"` is built
     /// as an ESP firmware image instead: the ELF plus the partition table it
     /// should be flashed with, which `myrmic flash` does in one go.
     ///

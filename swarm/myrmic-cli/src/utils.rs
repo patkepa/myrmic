@@ -75,6 +75,35 @@ pub fn determine_name<'a>(
         .context("cannot create a new cell with a non-unicode name")
 }
 
+/// Checks that `name` can name a crate: a Unicode XID start character or `_`,
+/// then XID characters or `-`.
+pub fn validate_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("<name> is empty");
+    }
+
+    let mut chars = name.chars();
+    if let Some(ch) = chars.next() {
+        if ch.is_ascii_digit() {
+            // Technically would be caught via `is_xid_start`, but this is a pretty standard mistake to make...
+            anyhow::bail!("<name> cannot start with a digit");
+        }
+        if !(unicode_ident::is_xid_start(ch) || ch == '_') {
+            anyhow::bail!(
+                "the first character in <name> must be a Unicode XID start character (most letters or `_`)"
+            );
+        }
+    }
+    for ch in chars {
+        if !(unicode_ident::is_xid_continue(ch) || ch == '-') {
+            anyhow::bail!(
+                "<name> must be Unicode XID characters (numbers, `-`, `_`, or most letters)"
+            );
+        }
+    }
+    Ok(())
+}
+
 impl Ctx {
     pub async fn session(&self) -> anyhow::Result<zenoh::Session> {
         let mut zenoh_config = zenoh::Config::default();

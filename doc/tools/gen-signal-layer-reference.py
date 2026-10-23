@@ -67,8 +67,8 @@ actuators = [d for d in drivers if d.get("writes")]
 lines = ["# Drivers\n", BANNER,
  "A driver is what knows one device. A board file names a driver on a device; a pipeline then\n"
  "reads that device as a source or writes to it through an outlet.\n\n"
- f"There are {len(drivers)} drivers in the tree. A device's `driver:` value is the directory name\n"
- "below, and the crate it resolves to is that name plus `-driver`.\n"]
+ "Every driver in the tree is listed below. A device's `driver:` value is its directory\n"
+ "name, and the crate it resolves to is that name plus `-driver`.\n"]
 
 lines.append("\n## Sensor drivers\n\nThese produce values a pipeline can tap.\n")
 lines.append("\n| Driver | Reads over | Publishes | Extra pins |\n|---|---|---|---|")

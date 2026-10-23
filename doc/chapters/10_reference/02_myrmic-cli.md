@@ -31,7 +31,10 @@ The following environment variables control the behavior of the `myrmic` command
 Below is the full list of `myrmic` commands, each with a dedicated reference page covering its synopsis, options, and examples.
 
 ### Setup
-- [`new`](02_myrmic-cli/01_new.md) - Scaffold a new cell crate.
+- [`new`](02_myrmic-cli/01_new.md) - Scaffold a new cell or ESP32 firmware crate.
+- [`signal-layer new`](02_myrmic-cli/16_signal-layer/01_new.md) - Scaffold a Signal Layer pipeline project, on Linux or into an ESP32 firmware. Aliases: `sl new`
+- [`signal-layer driver`](02_myrmic-cli/16_signal-layer/02_driver.md) - Scaffold a Signal Layer driver module. Aliases: `sl driver`
+- [`signal-layer step`](02_myrmic-cli/16_signal-layer/03_step.md) - Scaffold a Signal Layer processing step module. Aliases: `sl step`
 
 ### Build
 - [`platforms`](02_myrmic-cli/02_platforms.md) - List available build platforms.

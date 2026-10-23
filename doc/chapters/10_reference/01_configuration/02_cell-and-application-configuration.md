@@ -25,6 +25,22 @@ initial_memory = 131_072
 max_memory = 262_144
 ```
 
+A crate with several cargo targets can give each target its own settings. Keys in `[package.metadata.myrmic.lib]` apply to the library, and keys in `[package.metadata.myrmic.bin.<name>]` apply to that binary; either overrides the package-level value of the same key. A table for a binary the crate doesn't declare is an error.
+
+**Example:**
+```toml
+[package.metadata.myrmic]
+heap_size = 32_768
+
+[package.metadata.myrmic.lib]
+heap_size = 65_536
+
+[package.metadata.myrmic.bin.sensor-node]
+firmware = "esp32"
+```
+
+A firmware crate sets `firmware = "esp32"` (aliases: `firmware-family`, `family`) instead of the memory keys. Its own cargo features pick the chip, and `myrmic flash` refuses an image built for a different chip than the attached board's. The chip names `esp32c5`, `esp32c6` and `esp32c61` are still accepted, but are deprecated.
+
 > **Note:** For workspaces there is no way to configure memory at the workspace level - only through the `Cargo.toml` of each member Cell.
 
 ## Application
@@ -52,7 +68,7 @@ A list of instances to deploy. Each entry references exactly one entry from `cla
 
 - `class` - References a cell `classes` entry by `id`.
 - `bridge` - References a bridge `classes` entry by `id`.
-- `sri` *(optional)* - SRI to deploy this instance under. Defaults to the referenced class id.
+- `srn` *(optional)* - SRN to deploy this instance under. Defaults to the referenced class id.
 - `tags` *(optional)* - Capability tags the target runtime must advertise - controls which runtimes this Cell is placed on. Defaults to an empty list, meaning it deploys to any runtime.
 - `init` *(optional)* - **Cell instances only.** Arguments delivered to the Cell's initialization handler on deploy. Encoded as JSON by default; a value that isn't valid JSON is sent as a JSON string.
 - `init_file` *(optional)* - **Cell instances only.** Path to a file relative to the app-spec directory, whose raw bytes are delivered verbatim to the Cell's initialization handler.
@@ -123,15 +139,15 @@ classes:
 
 instances:
   - class: my-cell-class-id-1
-    sri: my-cell-1
+    srn: my-cell-1
     tags: [my-tag-1]
 
   - class: my-cell-class-id-2
-    sri: my-cell-2
+    srn: my-cell-2
     tags: [my-tag-2]
 
   - bridge: my-mqtt-bridge
-    sri: bridge.mqtt
+    srn: bridge.mqtt
 ```
 
 ## See Also

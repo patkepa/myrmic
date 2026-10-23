@@ -172,7 +172,7 @@ pub unsafe fn claim_dram2() -> usize {
 /// `Internal`-capped DMA/controller allocations). [`setup_heap!`] registers it
 /// before the internal regions so general (untagged) allocations prefer PSRAM and
 /// leave internal DRAM for the DMA/stack allocations that require it. Returns the
-/// mapped size in bytes.
+/// mapped size in bytes: 0, with nothing added, on a part without PSRAM.
 ///
 /// # Safety
 ///
@@ -181,6 +181,11 @@ pub unsafe fn claim_dram2() -> usize {
 pub unsafe fn claim_psram(psram: esp_hal::peripherals::PSRAM<'static>) -> usize {
     let psram = esp_hal::psram::Psram::new(psram, esp_hal::psram::PsramConfig::default());
     let (start, size) = psram.raw_parts();
+    // Not every part in the family carries PSRAM (the ESP32-C5FH4 has none);
+    // esp-hal then maps nothing, and an empty heap region is not allowed.
+    if size == 0 {
+        return 0;
+    }
     // SAFETY: (start, size) describe the window esp-hal just mapped; runs once.
     unsafe {
         esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(

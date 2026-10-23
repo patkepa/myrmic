@@ -1,6 +1,6 @@
 # Part 4 - The Irrigation Agent
 
-This is Part 4 of the [Smart Greenhouse](../02_smart-greenhouse.md) tutorial. You automate the watering decision - learning how cells send commands to each other, and where an application's business logic belongs.
+This is Part 4 of the [Smart Greenhouse](../01_smart-greenhouse.md) tutorial. You automate the watering decision - learning how cells send commands to each other, and where an application's business logic belongs.
 
 It continues where [Part 3](./03_the-grow-bed.md) left off: the runtime is running in Terminal 1, the sensor, the pump, and the grow-bed are deployed, and Terminal 3 is your event window.
 

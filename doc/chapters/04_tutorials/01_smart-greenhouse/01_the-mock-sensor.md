@@ -1,6 +1,6 @@
 # Part 1 - The Mock Sensor
 
-This is Part 1 of the [Smart Greenhouse](../02_smart-greenhouse.md) tutorial. You start the runtime, scaffold your first cell, and build a mock soil-moisture sensor that publishes a reading every second - and reacts to the weather. Along the way you will learn about *cell events*: how cells publish them and how they subscribe to them.
+This is Part 1 of the [Smart Greenhouse](../01_smart-greenhouse.md) tutorial. You start the runtime, scaffold your first cell, and build a mock soil-moisture sensor that publishes a reading every second - and reacts to the weather. Along the way you will learn about *cell events*: how cells publish them and how they subscribe to them.
 
 ---
 

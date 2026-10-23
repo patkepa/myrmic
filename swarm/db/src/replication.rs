@@ -359,20 +359,38 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         }
     }
 
-    pub async fn handle_message(self, sender: uhlc::ID, msg: ReplicaMessage) {
+    /// The receipt time is taken when this is called, not when the returned
+    /// future first runs: handling can sit queued for seconds, and a peer's
+    /// departure noticed in between must outrank its older news.
+    pub fn handle_message(self, sender: uhlc::ID, msg: ReplicaMessage) -> impl Future<Output = ()> {
+        let received_at = Instant::now();
+
+        async move {
+            self.handle_message_received_at(sender, msg, received_at)
+                .await;
+        }
+    }
+
+    async fn handle_message_received_at(
+        self,
+        sender: uhlc::ID,
+        msg: ReplicaMessage,
+        received_at: Instant,
+    ) {
         let me = self.store.node_id();
 
         if me == sender {
             return;
         }
 
-        tracing::debug!("[{}] Received {} from [{}]", me, msg.name(), sender);
+        let name = msg.name();
+        tracing::debug!("[{}] Received {} from [{}]", me, name, sender);
 
         let result = match msg {
             ReplicaMessage::Probe(probe) => self.handle_probe(probe).await,
             ReplicaMessage::Announce(announce) => match self.mode {
-                ReplicaMode::Full => self.handle_announce(sender, announce).await,
-                ReplicaMode::Offload => self.handle_coverage(sender, announce).await,
+                ReplicaMode::Full => self.handle_announce(sender, announce, received_at).await,
+                ReplicaMode::Offload => self.handle_coverage(sender, announce, received_at).await,
             },
             ReplicaMessage::ChangeSetReq(req) => self.handle_cs_req(req).await,
             ReplicaMessage::ChangeSet(cs) => match self.mode {
@@ -383,7 +401,11 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         };
 
         if let Err(err) = result {
-            tracing::error!("unable to process replica message: {}", err);
+            if err.is::<crate::store::Unavailable>() {
+                tracing::debug!("dropping a {name} while the store is unavailable");
+            } else {
+                tracing::error!("unable to process a {name}: {err:#}");
+            }
         }
     }
 
@@ -464,6 +486,12 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         floored: bool,
         reason: AnnounceReason,
     ) -> anyhow::Result<Vec<api::Scope>> {
+        // A store that refuses writes must not be vouched for as a holder: peers
+        // would keep routing to it, and it can't ingest what they send back.
+        if self.store.is_unavailable() {
+            return Ok(vec![]);
+        }
+
         let me = self.store.node_id();
 
         let frontiers = self.frontiers().await?;
@@ -566,7 +594,12 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         }
     }
 
-    async fn handle_announce(&self, sender: uhlc::ID, announce: Announce) -> anyhow::Result<()> {
+    async fn handle_announce(
+        &self,
+        sender: uhlc::ID,
+        announce: Announce,
+        received_at: Instant,
+    ) -> anyhow::Result<()> {
         let me = self.store.node_id();
         let peer = sender.to_le_bytes();
 
@@ -650,7 +683,7 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         }
 
         self.store
-            .record_peer_frontier(peer, their_known, full_replica);
+            .record_peer_frontier(peer, their_known, full_replica, received_at);
 
         Ok(())
     }
@@ -667,7 +700,12 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
     /// Only explicitly announced heads count: a floored announce's elided
     /// prefix cannot vouch for individual versions, so old holdings retire off
     /// the full announces our own announce's probe solicits.
-    async fn handle_coverage(&self, sender: uhlc::ID, announce: Announce) -> anyhow::Result<()> {
+    async fn handle_coverage(
+        &self,
+        sender: uhlc::ID,
+        announce: Announce,
+        received_at: Instant,
+    ) -> anyhow::Result<()> {
         // The frontier checked is exactly what the announce vouched for, so
         // it is also exactly what a retirement on it may release.
         let covered = if announce.full_replica {
@@ -693,13 +731,15 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             None
         };
 
-        self.store.record_peer_frontier(
+        let vouched = self.store.record_peer_frontier(
             sender.to_le_bytes(),
             announce.known,
             announce.full_replica,
+            received_at,
         );
 
-        if let Some(points) = covered {
+        // Coverage from a peer that has since left is no coverage.
+        if let Some(points) = covered.filter(|_| vouched) {
             let me = self.store.node_id();
             let (namespace, database, schema) = self.subject.as_keyexprs();
             tracing::debug!(
@@ -779,7 +819,11 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
             }
             if let Err(err) = self.apply_pull(scope, chunks).await {
                 // Partially applied; the holder's next announce drives a retry.
-                tracing::error!("unable to apply a pulled page: {}", err);
+                if err.is::<crate::store::Unavailable>() {
+                    tracing::debug!("dropping a pulled page while the store is unavailable");
+                } else {
+                    tracing::error!("unable to apply a pulled page: {:#}", err);
+                }
                 return true;
             }
             pages += 1;
@@ -1021,7 +1065,11 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                         tx.insert_changeset(sp, chunk.meta, &chunk.entries)?;
                     }
 
-                    Ok(tx.commit().is_ok())
+                    match tx.commit() {
+                        Ok(()) => Ok(true),
+                        Err(err) if err.is::<crate::store::Conflict>() => Ok(false),
+                        Err(err) => Err(err.context("unable to commit a pulled page")),
+                    }
                 })
                 .await
                 .context("the page apply task failed")??
@@ -1184,7 +1232,13 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         // messages). A dropped chunk heals on the peer's next announce.
         for chunk in chunks {
             if let Err(err) = self.apply_chunk(&scope, chunk).await {
-                tracing::error!("unable to apply a changeset chunk: {}", err);
+                // The store reports its own unavailability; the rest of the
+                // batch would only fail the same way.
+                if err.is::<crate::store::Unavailable>() {
+                    tracing::debug!("dropping a changeset while the store is unavailable");
+                    break;
+                }
+                tracing::error!("unable to apply a changeset chunk: {:#}", err);
             }
         }
 
@@ -1212,23 +1266,18 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
         let sp = domain::Key::sync_point().scope(scope).with_sp_id(cs_sp);
 
         let mut count = 0;
-        let mut inserted = false;
-        loop {
-            let tx = self.store.begin_local(&TransactionOptions::write());
-
-            let mut tx = match tx {
-                Ok(tx) => tx,
-                Err(err) => {
-                    tracing::error!("Failed to create transaction: {}", err);
-                    break;
-                }
-            };
+        let inserted = loop {
+            let mut tx = self
+                .store
+                .begin_local(&TransactionOptions::write())
+                .context("unable to start local transaction")?;
 
             let wrote = tx.insert_changeset(sp, sm, &entries)?;
 
-            if tx.commit().is_ok() {
-                inserted = wrote;
-                break;
+            match tx.commit() {
+                Ok(()) => break wrote,
+                Err(err) if err.is::<crate::store::Conflict>() => (),
+                Err(err) => return Err(err.context("unable to commit a changeset chunk")),
             }
 
             count += 1;
@@ -1240,10 +1289,9 @@ impl<T: ReplicaTransport, M: Send + Sync + 'static> Replicator<T, M> {
                 tracing::error!("[{}]{} waiting for retry", me, scope);
                 tokio::time::sleep(Duration::from_millis(20 + jitter)).await;
             } else {
-                tracing::error!("[{}]{} giving up", me, scope);
-                break;
+                anyhow::bail!("[{me}]{scope} a changeset chunk kept conflicting; giving up");
             }
-        }
+        };
 
         if inserted {
             tracing::trace!("[{}]{} ingested changeset @ {:?}", me, scope, cs_sp);

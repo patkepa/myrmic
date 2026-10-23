@@ -128,7 +128,7 @@ jobs:
           submodules: true
       - run: .ci/check/embedded ${{ matrix.chip }}
 
-  # Scaffolds a Signal Layer pipeline with `myrmic new --pipeline` and compiles
+  # Scaffolds a Signal Layer pipeline with `myrmic signal-layer new` and compiles
   # it for both the Linux and firmware targets.
   scaffold:
     if: ${{ !github.event.pull_request.draft }}
